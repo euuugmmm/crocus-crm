@@ -49,7 +49,7 @@ export default function AgentBalancePage() {
 
       const ops: Row[] = [
         ...comms.map((c) => ({
-          type: "commission",
+          type: "commission" as const,
           id: c.id!,
           date: c.createdAt?.toDate?.() || new Date(0),
           amount: typeof c.commission === "number" ? c.commission : 0,
@@ -57,7 +57,7 @@ export default function AgentBalancePage() {
           bookingNumber: c.bookingNumber || "",
         })),
         ...payouts.map((p) => ({
-          type: "payout",
+          type: "payout" as const,
           id: p.id!,
           date: p.createdAt?.toDate?.() || new Date(0),
           amount: typeof p.amount === "number" ? p.amount : 0,
