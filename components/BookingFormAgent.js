@@ -14,7 +14,8 @@ export default function BookingFormAgent({
   onSubmit,
   bookingNumber = "",
   agentName = "",
-  agentAgency = ""
+  agentAgency = "",
+  isManager = false
 }) {
   const router = useRouter();
 
