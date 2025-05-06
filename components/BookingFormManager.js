@@ -187,12 +187,13 @@ export default function BookingFormManager({
         <label className="block font-medium">Статус</label>
         <select value={status} onChange={e => setStatus(e.target.value)} className="w-full border rounded p-2">
           <option value="Новая">Новая</option>
-          <option value="Готова к оплате">Готова к оплате</option>
-          <option value="Оплачено">Оплачено</option>
-          <option value="Ожидает подтверждения">Ожидает подтверждения</option>
+          <option value="Готова к оплате туристом">Готова к оплате туристом</option>
+          <option value="Оплачено туристом">Оплачено туристом</option>
+          <option value="Ожидает подтверждения оператора">Ожидает подтверждения оператора</option>
           <option value="Подтверждено">Подтверждено</option>
           <option value="Документы загружены">Документы загружены</option>
           <option value="Завершено">Завершено</option>
+          <option value="Отменен">Отменен</option>
         </select>
       </div>
 

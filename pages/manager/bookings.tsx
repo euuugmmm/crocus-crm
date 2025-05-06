@@ -1,0 +1,251 @@
+// pages/manager/bookings.tsx
+"use client";
+
+import { useEffect, useState, useRef } from "react";
+import Link from "next/link";
+import { useRouter } from "next/router";
+import { collection, query, onSnapshot, deleteDoc, doc } from "firebase/firestore";
+import { format } from "date-fns";
+import { db } from "@/firebaseConfig";
+import { useAuth } from "@/context/AuthContext";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { DownloadTableExcel } from "react-export-table-to-excel";
+
+const statusOptions = [
+  { value: "all", label: "Все" },
+  { value: "Новая", label: "Новая" },
+  { value: "Готова к оплате туристом", label: "Готова к оплате туристом" },
+  { value: "Оплачено туристом", label: "Оплачено туристом" },
+  { value: "Ожидает подтверждения оператора", label: "Ожидает подтверждения оператора" },
+  { value: "Подтверждено", label: "Подтверждено" },
+  { value: "Документы загружены", label: "Документы загружены" },
+  { value: "Завершено", label: "Завершено" },
+  { value: "Отменен", label: "Отменен" },
+];
+
+const statusColors: Record<string, string> = {
+  "Новая": "bg-yellow-200 text-yellow-600",
+  "Готова к оплате туристом": "bg-orange-200 text-orange-600",
+  "Оплачено туристом": "bg-blue-200 text-blue-600",
+  "Ожидает подтверждения оператора": "bg-purple-200 text-purple-600",
+  "Подтверждено": "bg-green-200 text-green-600",
+  "Документы загружены": "bg-indigo-200 text-indigo-600",
+  "Завершено": "bg-pink-500 text-gray-100",
+  "Отменен": "bg-red-200 text-red-600",
+};
+
+export default function ManagerBookings() {
+  const router = useRouter();
+  const { user, isManager, logout } = useAuth();
+  const [bookings, setBookings] = useState<any[]>([]);
+  const [filters, setFilters] = useState({ operator: "", hotel: "", status: "all" });
+  const tableRef = useRef<HTMLTableElement | null>(null);
+
+  useEffect(() => {
+    if (!user) {
+      router.push("/login");
+      return;
+    }
+    if (!isManager) {
+      router.push("/agent/bookings");
+      return;
+    }
+
+    const q = query(collection(db, "bookings"));
+    const unsub = onSnapshot(q, snap => {
+      const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => (b.bookingNumber || "").localeCompare(a.bookingNumber || ""));
+      setBookings(arr);
+    });
+    return () => unsub();
+  }, [user, isManager]);
+
+  const filtered = bookings.filter(b =>
+    (b.operator || "").toLowerCase().includes(filters.operator.toLowerCase()) &&
+    (b.hotel || "").toLowerCase().includes(filters.hotel.toLowerCase()) &&
+    (filters.status === "all" || b.status === filters.status)
+  );
+
+  const totalBrutto = filtered.reduce((s, b) => s + (b.bruttoClient || 0), 0);
+  const totalCommission = filtered.reduce((s, b) => s + (b.commission || 0), 0);
+  const totalCrocus = filtered.reduce(
+    (s, b) =>
+      s +
+      (b.bruttoClient || 0) -
+      (b.internalNet || 0) -
+      (b.commission || 0) -
+      ((b.commission || 0) / 0.9 - (b.commission || 0)) -
+      (b.bankFeeAmount || 0),
+    0
+  );
+
+  const delBooking = async (id: string, num: string) => {
+    if (!window.confirm(`Удалить заявку ${num}?`)) return;
+    await deleteDoc(doc(db, "bookings", id));
+  };
+
+  const smallInp = "h-8 px-1 text-sm";
+
+  const nav = [
+    { href: "/manager/bookings", label: "Заявки" },
+    { href: "/manager/balances", label: "Балансы" },
+    { href: "/manager/payouts", label: "Выплаты" },
+  ];
+  const isActive = (h: string) => router.pathname.startsWith(h);
+
+  return (
+    <>
+      <header className="w-full bg-white border-b shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+          <span className="font-bold text-lg">CROCUS&nbsp;CRM</span>
+          <nav className="flex gap-4">
+            {nav.map(n => (
+              <Link
+                key={n.href}
+                href={n.href}
+                className={`px-3 py-2 text-sm font-medium border-b-2 ${
+                  isActive(n.href)
+                    ? "border-indigo-600 text-black"
+                    : "border-transparent text-gray-600 hover:text-black"
+                }`}
+              >
+                {n.label}
+              </Link>
+            ))}
+          </nav>
+          <Button size="sm" variant="destructive" onClick={logout}>
+            Выйти
+          </Button>
+        </div>
+      </header>
+
+      <Card className="w-full mx-auto mt-6">
+        <CardContent className="p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h1 className="text-2xl font-bold">Заявки менеджера</h1>
+            <DownloadTableExcel filename="manager_bookings" sheet="Заявки" currentTableRef={tableRef.current}>
+              <Button className="bg-green-600 hover:bg-green-700 text-white">Экспорт в Excel</Button>
+            </DownloadTableExcel>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table ref={tableRef} className="min-w-[1300px] w-full border text-sm">
+              <thead className="bg-gray-100 text-center">
+                <tr>
+                  <th className="px-2 py-1 border">Дата</th>
+                  <th className="px-2 py-1 border">№</th>
+                  <th className="px-2 py-1 border">Агент</th>
+                  <th className="px-2 py-1 border">Оператор</th>
+                  <th className="px-2 py-1 border">Отель</th>
+                  <th className="px-2 py-1 border">Заезд</th>
+                  <th className="px-2 py-1 border">Выезд</th>
+                  <th className="px-2 py-1 border w-40">Клиент (€)</th>
+                  <th className="px-2 py-1 border w-40">Комиссия (€)</th>
+                  <th className="px-2 py-1 border w-40">Крокус (€)</th>
+                  <th className="px-2 py-1 border">Статус</th>
+                  <th className="px-2 py-1 border">Инвойс</th>
+                  <th className="px-2 py-1 border">Комментарий</th>
+                  <th className="px-2 py-1 border">Действия</th>
+                </tr>
+                <tr className="bg-white border-b text-center">
+                  <td></td><td></td><td></td>
+                  <td><Input className={smallInp} value={filters.operator} onChange={e => setFilters({ ...filters, operator: e.target.value })} placeholder="Фильтр" /></td>
+                  <td><Input className={smallInp} value={filters.hotel} onChange={e => setFilters({ ...filters, hotel: e.target.value })} placeholder="Фильтр" /></td>
+                  <td></td><td></td><td></td><td></td><td></td>
+                  <td>
+                    <Select value={filters.status} onValueChange={v => setFilters({ ...filters, status: v })}>
+                      <SelectTrigger className="w-32 h-8"><SelectValue placeholder="Статус" /></SelectTrigger>
+                      <SelectContent>
+                        {statusOptions.map(o => (
+                          <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </td>
+                  <td></td><td></td><td></td>
+                </tr>
+              </thead>
+
+              <tbody>
+                {filtered.map(b => {
+                  const created = b.createdAt?.toDate?.() ? format(b.createdAt.toDate(), "dd.MM.yyyy") : "-";
+                  const crocusProfit = ((b.bruttoClient || 0) - (b.internalNet || 0) - (b.commission || 0) - ((b.commission || 0) / 0.9 - (b.commission || 0)) - (b.bankFeeAmount || 0)).toFixed(2);
+
+                  return (
+                    <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
+                      <td className="px-2 py-1 border whitespace-nowrap">{created}</td>
+                      <td className="px-2 py-1 border whitespace-nowrap">{b.bookingNumber || "—"}</td>
+                      <td className="px-2 py-1 border truncate max-w-[160px]">{b.agentName || "—"} ({b.agentAgency || "—"})</td>
+                      <td className="px-2 py-1 border truncate max-w-[120px]">{b.operator}</td>
+                      <td className="px-2 py-1 border truncate max-w-[160px]">{b.hotel}</td>
+                      <td className="px-2 py-1 border whitespace-nowrap">{b.checkIn ? format(new Date(b.checkIn), "dd.MM.yyyy") : "-"}</td>
+                      <td className="px-2 py-1 border whitespace-nowrap">{b.checkOut ? format(new Date(b.checkOut), "dd.MM.yyyy") : "-"}</td>
+                      <td className="px-2 py-1 border w-40 text-right">{(b.bruttoClient || 0).toFixed(2)}</td>
+                      <td className="px-2 py-1 border w-40 text-right">{(b.commission || 0).toFixed(2)}</td>
+                      <td className="px-2 py-1 border w-40 text-right">{crocusProfit}</td>
+                      <td className="px-2 py-1 border">
+                        <Badge className={statusColors[b.status] || "bg-gray-100 text-gray-800"}>{statusOptions.find(s => s.value === b.status)?.label || b.status || "—"}</Badge>
+                      </td>
+                      <td className="px-2 py-1 border">
+  {b.invoiceLink ? (
+    <a
+      href={b.invoiceLink}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <button className="bg-indigo-500 hover:bg-fuchsia-500 text-white text-sm px-3 py-1 rounded">
+        Открыть
+      </button>
+    </a>
+  ) : "—"}
+</td>
+
+<td className="px-2 py-1 border truncate max-w-[160px]">{b.comment || "—"}</td>
+
+<td className="px-2 py-1 border">
+  <div className="flex gap-2 justify-center">
+    <button
+      className="bg-cyan-500 hover:bg-cyan-600 text-white text-sm px-3 py-1 rounded"
+      onClick={() => router.push(`/manager/${b.id}`)}
+    >
+      Редактировать
+    </button>
+    <button
+      className="bg-red-500 hover:bg-red-600 text-white text-sm px-3 py-1 rounded"
+      onClick={() => delBooking(b.id, b.bookingNumber || "—")}
+    >
+      Удалить
+    </button>
+  </div>
+</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+
+              <tfoot className="bg-gray-100 font-semibold">
+                <tr>
+                  <td colSpan={7} className="px-2 py-2 text-right">Итого:</td>
+                  <td className="px-2 py-2 text-right">{totalBrutto.toFixed(2)} €</td>
+                  <td className="px-2 py-2 text-right">{totalCommission.toFixed(2)} €</td>
+                  <td className="px-2 py-2 text-right">{totalCrocus.toFixed(2)} €</td>
+                  <td colSpan={4}></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </>
+  );
+}
