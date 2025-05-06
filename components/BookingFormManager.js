@@ -13,7 +13,8 @@ export default function BookingFormManager({
   onSubmit,
   agentName = "",
   agentAgency = "",
-  bookingNumber = ""
+  bookingNumber = "",
+  isManager = false
 }) {
   const [operator, setOperator] = useState(initialData.operator || "");
   const [region, setRegion] = useState(initialData.region || "");
