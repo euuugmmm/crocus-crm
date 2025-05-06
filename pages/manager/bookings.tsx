@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { DownloadTableExcel } from "react-export-table-to-excel";
+import type { Booking } from "@/lib/types";
 
 const statusOptions = [
   { value: "all", label: "Все" },
@@ -63,8 +64,8 @@ export default function ManagerBookings() {
 
     const q = query(collection(db, "bookings"));
     const unsub = onSnapshot(q, snap => {
-      const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      arr.sort((a, b) => (b.bookingNumber || "").localeCompare(a.bookingNumber || ""));
+      const arr: Booking[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as Booking) }));
+            arr.sort((a, b) => (b.bookingNumber || "").localeCompare(a.bookingNumber || ""));
       setBookings(arr);
     });
     return () => unsub();
