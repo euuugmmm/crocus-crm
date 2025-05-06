@@ -42,7 +42,10 @@ export default function AgentBookingsPage() {
     if (!user || !isAgent) return;
     const q = query(collection(db, "bookings"), where("agentId", "==", user.uid));
     const unsub = onSnapshot(q, snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const list = snap.docs.map(d => ({
+        id: d.id,
+        ...(d.data() as { bookingNumber?: string })
+      }));
       list.sort((a, b) => {
         const nA = parseInt((a.bookingNumber || "").replace(/\D/g, ""), 10) || 0;
         const nB = parseInt((b.bookingNumber || "").replace(/\D/g, ""), 10) || 0;
