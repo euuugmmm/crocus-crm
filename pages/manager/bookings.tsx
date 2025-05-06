@@ -25,24 +25,22 @@ import type { Booking } from "@/lib/types";
 const statusOptions = [
   { value: "all", label: "Все" },
   { value: "Новая", label: "Новая" },
-  { value: "Готова к оплате туристом", label: "Готова к оплате туристом" },
+  { value: "Готова к оплате", label: "Готова к оплате" },
   { value: "Оплачено туристом", label: "Оплачено туристом" },
-  { value: "Ожидает подтверждения оператора", label: "Ожидает подтверждения оператора" },
+  { value: "Ожидает confirm", label: "Ожидает confirm" },
   { value: "Подтверждено", label: "Подтверждено" },
-  { value: "Документы загружены", label: "Документы загружены" },
   { value: "Завершено", label: "Завершено" },
   { value: "Отменен", label: "Отменен" },
 ];
 
 const statusColors: Record<string, string> = {
-  "Новая": "bg-yellow-200 text-yellow-600",
-  "Готова к оплате туристом": "bg-orange-200 text-orange-600",
-  "Оплачено туристом": "bg-blue-200 text-blue-600",
-  "Ожидает подтверждения оператора": "bg-purple-200 text-purple-600",
-  "Подтверждено": "bg-green-200 text-green-600",
-  "Документы загружены": "bg-indigo-200 text-indigo-600",
-  "Завершено": "bg-pink-500 text-gray-100",
-  "Отменен": "bg-red-200 text-red-600",
+  "Новая": "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-600/20 rounded-sm",
+  "Готова к оплате": "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-600/20 rounded-sm",
+  "Оплачено туристом": "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-700/10 rounded-sm",
+  "Ожидает confirm": "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-purple-50 text-purple-700 ring-1 ring-inset ring-purple-700/10 rounded-sm",
+  "Подтверждено": "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-green-50 text-green-700 ring-1 ring-inset ring-green-600/20 rounded-sm",
+  "Завершено": "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-green-700 text-white ring-1 ring-inset ring-green-800/30 rounded-sm",
+  "Отменен": "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/10 rounded-sm",
 };
 
 export default function ManagerBookings() {
