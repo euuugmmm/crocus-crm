@@ -12,6 +12,8 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
+console.log('🔥 ENV PROJECT ID:', process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
+
 // Проверяем, было ли уже инициализировано приложение Firebase
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 

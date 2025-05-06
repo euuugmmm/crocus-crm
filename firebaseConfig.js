@@ -23,3 +23,4 @@ if (typeof window !== "undefined") {
 // Export Auth and Firestore instances
 export const auth = app ? getAuth(app) : null;
 export const db = app ? getFirestore(app) : null;
+console.log("firebase config", firebaseConfig);
