@@ -1,9 +1,16 @@
 // lib/types.ts
-interface Booking {
-  id: string;
+export interface Booking {
+  id?: string;
+  agentId?: string;
   bookingNumber?: string;
   agentName?: string;
   agentAgency?: string;
+  destination?: string;
+  startDate?: string;
+  endDate?: string;
+  clientPrice?: number;
+  agentCommission?: number;
+  payments?: { amount: number; date: string }[];
   operator?: string;
   hotel?: string;
   checkIn?: string;
@@ -19,15 +26,3 @@ interface Booking {
     toDate: () => Date;
   };
 }
-export type Booking = {
-    id?: string;
-    agentId?: string;
-    bookingNumber?: string;
-    destination?: string;
-    startDate?: string;
-    endDate?: string;
-    clientPrice?: number;
-    agentCommission?: number;
-    payments?: { amount: number; date: string }[];
-    status?: string;
-  };
