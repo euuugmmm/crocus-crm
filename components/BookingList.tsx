@@ -7,7 +7,7 @@ import { ColumnDef } from "@tanstack/react-table";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { DataTable } from "@/components/ui/table";
+import { DataTable } from "@/components/DataTable";
 
 import { Booking } from "@/lib/types";
 import { getBookingsForAgent } from "@/lib/firestore";

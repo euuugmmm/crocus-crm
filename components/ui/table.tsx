@@ -81,3 +81,28 @@ export {
   TableCell,
   TableCaption,
 }
+
+function DataTable({ columns, data }: { columns: any[], data: any[] }) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          {columns.map((col) => (
+            <TableHead key={col.accessorKey}>{col.header}</TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {data.map((row, i) => (
+          <TableRow key={i}>
+            {columns.map((col) => (
+              <TableCell key={col.accessorKey}>{row[col.accessorKey]}</TableCell>
+            ))}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+export { DataTable };
