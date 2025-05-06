@@ -11,6 +11,31 @@ import {
   getDoc,
 } from "firebase/firestore";
 
+/* ---------- Типы ---------- */
+
+type BookingDoc = {
+  id: string;
+  commission: number;
+  agentId: string;
+  status: string;
+  [key: string]: any;
+};
+
+type PayoutDoc = {
+  id: string;
+  amount: number;
+  agentId: string;
+  [key: string]: any;
+};
+
+type AgentDoc = {
+  id: string;
+  agentName?: string;
+  agencyName?: string;
+  role?: string;
+  [key: string]: any;
+};
+
 /* ---------- 1. Один агент ---------- */
 
 export async function getAgentBalance(agentId: string): Promise<number> {
@@ -24,41 +49,41 @@ export async function getAgentBalance(agentId: string): Promise<number> {
   return totalCom - totalPay;
 }
 
-export async function getAgentCommissions(agentId: string): Promise<any[]> {
+export async function getAgentCommissions(agentId: string): Promise<BookingDoc[]> {
   const q = query(
     collection(db, "bookings"),
     where("agentId", "==", agentId),
     where("status", "==", "Завершено")
   );
   const snap = await getDocs(q);
-  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() } as BookingDoc));
 }
 
-export async function getAgentPayouts(agentId: string): Promise<any[]> {
+export async function getAgentPayouts(agentId: string): Promise<PayoutDoc[]> {
   const q = query(collection(db, "payouts"), where("agentId", "==", agentId));
   const snap = await getDocs(q);
-  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() } as PayoutDoc));
 }
 
 /* ---------- 2. Все агенты и балансы ---------- */
 
-export async function getAllAgents(): Promise<any[]> {
+export async function getAllAgents(): Promise<AgentDoc[]> {
   const q = query(collection(db, "users"), where("role", "==", "agent"));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as AgentDoc));
 }
 
-export async function getAllCommissions(): Promise<any[]> {
+export async function getAllCommissions(): Promise<BookingDoc[]> {
   const q = query(collection(db, "bookings"), where("status", "==", "Завершено"));
   const snap = await getDocs(q);
   return snap.docs
-    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .map((doc) => ({ id: doc.id, ...doc.data() } as BookingDoc))
     .filter((d) => typeof d.commission === "number" && d.agentId);
 }
 
-export async function getAllPayouts(): Promise<any[]> {
+export async function getAllPayouts(): Promise<PayoutDoc[]> {
   const snap = await getDocs(collection(db, "payouts"));
-  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() } as PayoutDoc));
 }
 
 export async function getAgentBalances(): Promise<any[]> {
