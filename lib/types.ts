@@ -22,6 +22,7 @@ export interface Booking {
   status?: string;
   invoiceLink?: string;
   comment?: string;
+  voucherLinks?: string[];
   createdAt?: {
     toDate: () => Date;
   };
