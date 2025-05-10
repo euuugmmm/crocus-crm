@@ -1,90 +1,92 @@
-// pages/manager/[id].tsx
+/* pages/manager/[id].tsx */
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
-import { useAuth } from "@/context/AuthContext";
-import { doc, getDoc, updateDoc, Timestamp } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
-import BookingFormManager from "@/components/BookingFormManager";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { useRouter }           from "next/router";
+import Link                    from "next/link";
+import { Button }              from "@/components/ui/button";
 
-/* -------------------------------------------------- */
+import { useAuth }             from "@/context/AuthContext";
+import { db }                  from "@/firebaseConfig";
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  Timestamp,
+}                              from "firebase/firestore";
 
+import BookingFormManager      from "@/components/BookingFormManager";
+import UploadVouchers          from "@/components/UploadVouchers";
+
+/* ---------------------------- компонент ----------------------------- */
 export default function EditBookingPage() {
-  const router = useRouter();
-  const { id } = router.query;
-  const { user, loading, isManager, logout } = useAuth();
+  /* ---------- auth / роутинг ---------- */
+  const router                       = useRouter();
+  const { id }                       = router.query;          // Firestore id заявки
+  const { user, loading, isManager,
+          logout }                   = useAuth();
 
-  const [bookingData, setBookingData] = useState<any>(null);
-  const [loadingData, setLoadingData] = useState(true);
+  /* ---------- state ---------- */
+  const [booking, setBooking]        = useState<any>(null);
+  const [loadingData, setLoadingData]= useState(true);
 
+  /* ---------- guards ---------- */
   useEffect(() => {
-    if (!loading) {
-      if (!user) {
-        router.replace("/login");
-      } else if (!isManager) {
-        router.replace("/agent/bookings");
-      }
-    }
-  }, [user, loading, isManager]);
+    if (loading) return;
+    if (!user)         router.replace("/login");
+    else if (!isManager) router.replace("/agent/bookings");
+  }, [loading, user, isManager]);
 
+  /* ---------- fetch booking once ---------- */
   useEffect(() => {
-    const fetchBooking = async () => {
-      if (id && isManager) {
-        try {
-          const docRef = doc(db, "bookings", id as string);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            setBookingData({ id: docSnap.id, ...docSnap.data() });
-          }
-        } catch (err) {
-          console.error("Ошибка при загрузке заявки:", err);
-        } finally {
-          setLoadingData(false);
-        }
+    (async () => {
+      if (!id || !isManager) return;
+
+      try {
+        const snap = await getDoc(doc(db, "bookings", id as string));
+        if (snap.exists()) setBooking({ id: snap.id, ...snap.data() });
+      } catch (e) {
+        console.error("Booking load error:", e);
+      } finally {
+        setLoadingData(false);
       }
-    };
-    fetchBooking();
+    })();
   }, [id, isManager]);
 
-  const handleUpdate = async (updatedData: any) => {
-    try {
-      updatedData.updatedAt = Timestamp.now();
-      const docRef = doc(db, "bookings", id as string);
-      await updateDoc(docRef, updatedData);
-      router.push("/manager/bookings");
-    } catch (err) {
-      console.error("Ошибка при сохранении:", err);
-    }
+  /* ---------- update booking (данные из формы) ---------- */
+  const saveBooking = async (data: any) => {
+    if (!id) return;
+    await updateDoc(doc(db, "bookings", id as string), {
+      ...data,
+      updatedAt: Timestamp.now(),
+    });
+    router.push("/manager/bookings");
   };
 
+  /* ---------- навигация наверху ---------- */
   const nav = [
-    { href: "/manager/bookings", label: "Заявки" },
+    { href: "/manager/bookings", label: "Заявки"  },
     { href: "/manager/balances", label: "Балансы" },
-    { href: "/manager/payouts", label: "Выплаты" },
+    { href: "/manager/payouts",  label: "Выплаты" },
   ];
-  const isActive = (h: string) => router.pathname.startsWith(h);
+  const isActive = (href: string) => router.pathname.startsWith(href);
 
-  if (loading || loadingData) {
-    return <p className="text-center mt-6">Загрузка...</p>;
-  }
+  /* ---------- UI ---------- */
+  if (loading || loadingData)
+    return <p className="text-center mt-6">Загрузка…</p>;
 
-  if (!bookingData) {
-    return (
-      <p className="text-center mt-6 text-red-500">Заявка не найдена.</p>
-    );
-  }
+  if (!booking)
+    return <p className="text-center mt-6 text-red-500">Заявка не найдена.</p>;
 
   return (
     <>
-      {/* ------ Шапка ------ */}
+      {/* ===== HEADER ===== */}
       <header className="w-full bg-white border-b shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <span className="font-bold text-lg">CROCUS&nbsp;CRM</span>
+
           <nav className="flex gap-4">
-            {nav.map((n) => (
+            {nav.map(n => (
               <Link
                 key={n.href}
                 href={n.href}
@@ -98,24 +100,37 @@ export default function EditBookingPage() {
               </Link>
             ))}
           </nav>
+
           <Button size="sm" variant="destructive" onClick={logout}>
             Выйти
           </Button>
         </div>
       </header>
 
-      {/* ------ Контент ------ */}
-      <div className="max-w-3xl mx-auto px-4 py-6">
-        <h1 className="text-2xl font-bold mb-4">
-          Редактировать заявку: {bookingData.bookingCode || bookingData.bookingNumber || "—"}
+      {/* ===== CONTENT ===== */}
+      <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+        <h1 className="text-2xl font-bold">
+          Редактировать заявку:&nbsp;
+          {booking.bookingNumber || booking.bookingCode || "—"}
         </h1>
 
+        {/* --- форма брони --- */}
         <BookingFormManager
-          initialData={bookingData}
-          onSubmit={handleUpdate}
-          isManager={true}
-          agentName={bookingData.agentName}
-          agentAgency={bookingData.agentAgency}
+          initialData={booking}
+          onSubmit={saveBooking}
+          isManager
+          agentName={booking.agentName}
+          agentAgency={booking.agentAgency}
+        />
+
+        {/* --- загрузка / просмотр ваучеров --- */}
+        <UploadVouchers
+          /** id документа в Firestore          */
+          bookingDocId={id as string}
+          /** human-readable номер (для имени файла) */
+          bookingNumber={booking.bookingNumber || ""}
+          /** текущий массив ссылок (doc.voucherLinks) */
+          links={booking.voucherLinks || []}
         />
       </div>
     </>
