@@ -2,5 +2,9 @@ node_modules
 .next
 .env*
 .vscode
+<<<<<<< HEAD
 crocuscrm-*.jsoncrocuscrm-5323c46d9f54.json
 crocuscrm-*.json
+=======
+crocuscrm-*.json
+>>>>>>> d556f97 (добавлена загрузка ваучеров, таблицы, обновлены интерфейсы)
