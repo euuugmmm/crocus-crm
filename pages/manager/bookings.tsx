@@ -30,7 +30,7 @@ import type { Booking }   from "@/lib/types";
 const statusOptions = [
   { value: "all",            label: "Все" },
   { value: "Новая",          label: "Новая" },
-  { value: "Готова к оплате",label: "Готова к оплате" },
+  { value: "Ожидание оплаты",label: "Ожидание оплаты" },
   { value: "Оплачено туристом",label: "Оплачено туристом" },
   { value: "Ожидает confirm",label: "Ожидает confirm" },
   { value: "Подтверждено",   label: "Подтверждено" },
@@ -40,7 +40,7 @@ const statusOptions = [
 
 const statusColors: Record<string,string> = {
   "Новая":              "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-yellow-50  text-yellow-800  ring-1 ring-inset ring-yellow-600/20  rounded-sm",
-  "Готова к оплате":    "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-orange-50  text-orange-700  ring-1 ring-inset ring-orange-600/20 rounded-sm",
+  "Ожидание оплаты":    "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-orange-50  text-orange-700  ring-1 ring-inset ring-orange-600/20 rounded-sm",
   "Оплачено туристом":  "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-blue-50    text-blue-700    ring-1 ring-inset ring-blue-700/10    rounded-sm",
   "Ожидает confirm":    "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-purple-50 text-purple-700 ring-1 ring-inset ring-purple-700/10 rounded-sm",
   "Подтверждено":       "inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium bg-green-50  text-green-700   ring-1 ring-inset ring-green-600/20  rounded-sm",
@@ -231,7 +231,7 @@ export default function ManagerBookings() {
                       <td className="px-2 py-1 border">
                         {b.invoiceLink
                           ? <a href={b.invoiceLink} target="_blank" rel="noreferrer"
-                               className="text-indigo-600 hover:underline">Invoice</a>
+                               className="text-indigo-600 hover:underline">Открыть</a>
                           : "—"}
                       </td>
 
@@ -242,7 +242,7 @@ export default function ManagerBookings() {
                               <div key={i}>
                                 <a href={l} target="_blank" rel="noreferrer"
                                    className="text-sky-600 hover:underline">
-                                  Voucher&nbsp;{i+1}
+                                  Ваучер&nbsp;{i+1}
                                 </a>
                               </div>
                             ))

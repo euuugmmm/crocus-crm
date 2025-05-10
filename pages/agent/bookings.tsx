@@ -202,7 +202,7 @@ export default function AgentBookingsPage() {
                              target="_blank"
                              rel="noreferrer"
                              className="text-indigo-600 hover:underline">
-                            Invoice
+                            Открыть
                           </a>
                         : "—"}
                     </td>
@@ -214,7 +214,7 @@ export default function AgentBookingsPage() {
                             <div key={i}>
                               <a href={l} target="_blank" rel="noreferrer"
                                  className="text-sky-600 hover:underline">
-                                Voucher&nbsp;{i+1}
+                                Ваучер&nbsp;{i+1}
                               </a>
                             </div>
                           ))
