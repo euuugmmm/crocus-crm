@@ -7,7 +7,8 @@ import { db } from "@/firebaseConfig";
 
 interface Props {
   bookingDocId : string;       // Firestore id
-  bookingNumber: string;       // «CRT-00001» – попадёт в имя файла
+  bookingNumber: string;
+  links: string[];
 }
 
 export default function UploadVouchers({ bookingDocId, bookingNumber }: Props) {
