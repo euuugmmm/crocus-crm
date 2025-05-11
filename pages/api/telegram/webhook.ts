@@ -6,7 +6,7 @@ import { Timestamp } from "firebase-admin/firestore";
 
 export const config = { api: { bodyParser: false } };
 
-/* helper для отправки сообщения в Telegram */
+/* Telegram sender -------------------------------------------------- */
 async function send(chatId: number | string, text: string) {
   await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method : "POST",
@@ -15,8 +15,14 @@ async function send(chatId: number | string, text: string) {
   });
 }
 
-/* основной webhook-обработчик */
+/* Webhook handler -------------------------------------------------- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  /* 0. Health-checks от Telegram ― просто 200 OK */
+  if (req.method === "GET" || req.method === "HEAD") {
+    return res.status(200).end("ok");
+  }
+
+  /* 1. Принимаем только POST с update-телом */
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
   const raw  = await getRawBody(req);
@@ -28,26 +34,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const chatId = msg.chat.id;
   const text   = String(msg.text || "").trim().toUpperCase();
 
-  // Если текст — это 6-значный PIN
+  /* 2. 6-символьный PIN → ищем пользователя -------------------------------- */
   if (/^[A-Z0-9]{6}$/.test(text)) {
-    const qsnap = await adminDB
+    const snap = await adminDB
       .collection("users")
       .where("tgPin", "==", text)
       .limit(1)
       .get();
 
-    if (qsnap.empty) {
+    if (snap.empty) {
       await send(chatId, "❌ PIN не найден или уже использован.");
     } else {
-      const ref = qsnap.docs[0].ref;
-      await ref.update({
-        tgChatId   : chatId,
-        tgLinkedAt : Timestamp.now(),
-        tgPin      : null,
+      await snap.docs[0].ref.update({
+        tgChatId  : chatId,
+        tgLinkedAt: Timestamp.now(),
+        tgPin     : null,
       });
       await send(chatId, "✅ Успешно! Уведомления включены.");
     }
   } else {
+    /* 3. Любой другой текст */
     await send(chatId, "Отправьте одноразовый PIN из CRM, чтобы связать аккаунт.");
   }
 
