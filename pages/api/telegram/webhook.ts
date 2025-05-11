@@ -1,8 +1,9 @@
+// pages/api/telegram/webhook.ts  (должно быть ровно так)
 import type { NextApiRequest, NextApiResponse } from "next";
-import { adminDB } from "@/lib/firebaseAdmin";
-import { Timestamp } from "firebase-admin/firestore";
+import { adminDB }            from "@/lib/firebaseAdmin";
+import { Timestamp }          from "firebase-admin/firestore";
 
-export const config = { api: { bodyParser: true } }; // включаем bodyParser
+export const config = { api: { bodyParser: true } };   // ✅ bodyParser ON
 
 async function send(chatId: number | string, text: string) {
   await fetch(
@@ -18,13 +19,15 @@ async function send(chatId: number | string, text: string) {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
-  const body = req.body;
-  const msg = body?.message;
+  /* body уже распарсен Next-ом */
+  const body = req.body as any;
+  const msg  = body?.message;
   if (!msg) return res.status(200).end("no message");
 
   const chatId = msg.chat.id;
   const text   = String(msg.text || "").trim().toUpperCase();
 
+  /* ------ проверяем PIN ------ */
   if (/^[A-Z0-9]{6}$/.test(text)) {
     const qsnap = await adminDB
       .collection("users")
@@ -35,11 +38,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (qsnap.empty) {
       await send(chatId, "❌ PIN не найден или уже использован.");
     } else {
-      const ref = qsnap.docs[0].ref;
-      await ref.update({
-        tgChatId   : chatId,
-        tgLinkedAt : Timestamp.now(),
-        tgPin      : null,
+      await qsnap.docs[0].ref.update({
+        tgChatId  : chatId,
+        tgLinkedAt: Timestamp.now(),
+        tgPin     : null,
       });
       await send(chatId, "✅ Успешно! Уведомления включены.");
     }
