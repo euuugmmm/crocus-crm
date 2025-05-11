@@ -1,37 +1,34 @@
-/* pages/api/telegram/webhook.ts ----------------------------------- */
+/* pages/api/telegram/webhook.ts */
 import type { NextApiRequest, NextApiResponse } from "next";
-import getRawBody   from "raw-body";
-import { adminDB }  from "@/lib/firebaseAdmin";   //  ← убрали admin
-import { Timestamp } from "firebase-admin/firestore"; // если нужен реальный timestamp
+import getRawBody from "raw-body";
+import { adminDB } from "@/lib/firebaseAdmin";
+import { Timestamp } from "firebase-admin/firestore";
 
 export const config = { api: { bodyParser: false } };
 
-/* маленький helper для отправки сообщения */
+/* helper для отправки сообщения в Telegram */
 async function send(chatId: number | string, text: string) {
-  await fetch(
-    `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-    {
-      method : "POST",
-      headers: { "Content-Type": "application/json" },
-      body   : JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
-    }
-  );
+  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method : "POST",
+    headers: { "Content-Type": "application/json" },
+    body   : JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+  });
 }
 
-/* --------------------------------------------------------------- */
+/* основной webhook-обработчик */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
-  /* 1. получаем update от Telegram */
-  const raw  = await getRawBody(req);          // <Buffer ...>
-  const body = JSON.parse(raw.toString());     // объект update
+
+  const raw  = await getRawBody(req);
+  const body = JSON.parse(raw.toString());
 
   const msg = body?.message;
   if (!msg) return res.status(200).end("no message");
 
   const chatId = msg.chat.id;
-  const text   = String(msg.text || "").trim().toUpperCase();   // "ABC123"
+  const text   = String(msg.text || "").trim().toUpperCase();
 
-  /* 2. если это 6-символьный PIN — ищем в /users */
+  // Если текст — это 6-значный PIN
   if (/^[A-Z0-9]{6}$/.test(text)) {
     const qsnap = await adminDB
       .collection("users")
@@ -45,13 +42,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const ref = qsnap.docs[0].ref;
       await ref.update({
         tgChatId   : chatId,
-        tgLinkedAt : Timestamp.now(),                     // real timestamp
-        tgPin      : null,                                // «удаляем» PIN
+        tgLinkedAt : Timestamp.now(),
+        tgPin      : null,
       });
       await send(chatId, "✅ Успешно! Уведомления включены.");
     }
   } else {
-    /* 3. любое другое сообщение */
     await send(chatId, "Отправьте одноразовый PIN из CRM, чтобы связать аккаунт.");
   }
 
