@@ -1,9 +1,10 @@
-// pages/api/telegram/webhook.ts  (должно быть ровно так)
+/* pages/api/telegram/webhook.ts */
 import type { NextApiRequest, NextApiResponse } from "next";
-import { adminDB }            from "@/lib/firebaseAdmin";
-import { Timestamp }          from "firebase-admin/firestore";
+import { adminDB }   from "@/lib/firebaseAdmin";
+import { Timestamp } from "firebase-admin/firestore";
 
-export const config = { api: { bodyParser: true } };   // ✅ bodyParser ON
+/** ⚠️ bodyParser включён по умолчанию, можно вовсе убрать эту строку */
+export const config = { api: { bodyParser: true } };
 
 async function send(chatId: number | string, text: string) {
   await fetch(
@@ -12,22 +13,24 @@ async function send(chatId: number | string, text: string) {
       method : "POST",
       headers: { "Content-Type": "application/json" },
       body   : JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
-    }
+    },
   );
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
-  /* body уже распарсен Next-ом */
-  const body = req.body as any;
+  /* ---------- НИКАКОГО  getRawBody  ---------- */
+  const body = req.body as any;          // Next.js уже распарсил JSON
   const msg  = body?.message;
   if (!msg) return res.status(200).end("no message");
 
   const chatId = msg.chat.id;
   const text   = String(msg.text || "").trim().toUpperCase();
 
-  /* ------ проверяем PIN ------ */
   if (/^[A-Z0-9]{6}$/.test(text)) {
     const qsnap = await adminDB
       .collection("users")
