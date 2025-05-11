@@ -1,8 +1,8 @@
 /* pages/api/telegram/webhook.ts ----------------------------------- */
 import type { NextApiRequest, NextApiResponse } from "next";
-import getRawBody               from "raw-body";
-import { adminDB, admin }       from "@/lib/firebaseAdmin";
-import { Timestamp } from "firebase-admin/firestore";
+import getRawBody   from "raw-body";
+import { adminDB }  from "@/lib/firebaseAdmin";   //  ← убрали admin
+import { Timestamp } from "firebase-admin/firestore"; // если нужен реальный timestamp
 
 export const config = { api: { bodyParser: false } };
 
