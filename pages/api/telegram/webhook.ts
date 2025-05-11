@@ -20,6 +20,7 @@ async function send(chatId: number | string, text: string) {
 
 /* --------------------------------------------------------------- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
   /* 1. получаем update от Telegram */
   const raw  = await getRawBody(req);          // <Buffer ...>
   const body = JSON.parse(raw.toString());     // объект update
