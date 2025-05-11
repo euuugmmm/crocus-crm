@@ -1,60 +1,51 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import getRawBody from "raw-body";
 import { adminDB } from "@/lib/firebaseAdmin";
 import { Timestamp } from "firebase-admin/firestore";
 
-export const config = { api: { bodyParser: false } };
+export const config = { api: { bodyParser: true } }; // включаем bodyParser
 
 async function send(chatId: number | string, text: string) {
   await fetch(
     `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
     {
-      method: "POST",
+      method : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+      body   : JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
     }
   );
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  try {
-    if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
+  if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
-    const raw = await getRawBody(req);
-    if (!raw) throw new Error("Empty body");
+  const body = req.body;
+  const msg = body?.message;
+  if (!msg) return res.status(200).end("no message");
 
-    const body = JSON.parse(raw.toString());
-    const msg = body?.message;
-    if (!msg) return res.status(200).end("no message");
+  const chatId = msg.chat.id;
+  const text   = String(msg.text || "").trim().toUpperCase();
 
-    const chatId = msg.chat.id;
-    const text = String(msg.text || "").trim().toUpperCase();
+  if (/^[A-Z0-9]{6}$/.test(text)) {
+    const qsnap = await adminDB
+      .collection("users")
+      .where("tgPin", "==", text)
+      .limit(1)
+      .get();
 
-    if (/^[A-Z0-9]{6}$/.test(text)) {
-      const qsnap = await adminDB
-        .collection("users")
-        .where("tgPin", "==", text)
-        .limit(1)
-        .get();
-
-      if (qsnap.empty) {
-        await send(chatId, "❌ PIN не найден или уже использован.");
-      } else {
-        const ref = qsnap.docs[0].ref;
-        await ref.update({
-          tgChatId: chatId,
-          tgLinkedAt: Timestamp.now(),
-          tgPin: null,
-        });
-        await send(chatId, "✅ Успешно! Уведомления включены.");
-      }
+    if (qsnap.empty) {
+      await send(chatId, "❌ PIN не найден или уже использован.");
     } else {
-      await send(chatId, "Отправьте одноразовый PIN из CRM, чтобы связать аккаунт.");
+      const ref = qsnap.docs[0].ref;
+      await ref.update({
+        tgChatId   : chatId,
+        tgLinkedAt : Timestamp.now(),
+        tgPin      : null,
+      });
+      await send(chatId, "✅ Успешно! Уведомления включены.");
     }
-
-    return res.status(200).end("ok");
-  } catch (err: any) {
-    console.error("[telegram webhook ERROR]", err);
-    return res.status(500).json({ error: "Webhook error", message: err.message });
+  } else {
+    await send(chatId, "Отправьте одноразовый PIN из CRM, чтобы связать аккаунт.");
   }
+
+  res.status(200).end("ok");
 }
