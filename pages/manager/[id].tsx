@@ -55,13 +55,37 @@ export default function EditBookingPage() {
 
   /* ---------- update booking (данные из формы) ---------- */
   const saveBooking = async (data: any) => {
-    if (!id) return;
-    await updateDoc(doc(db, "bookings", id as string), {
-      ...data,
-      updatedAt: Timestamp.now(),
-    });
-    router.push("/manager/bookings");
-  };
+  if (!id) return;
+
+  const ref = doc(db, "bookings", id as string);
+  const oldSnap = await getDoc(ref);
+  const oldData = oldSnap.data();
+
+  await updateDoc(ref, {
+    ...data,
+    updatedAt: Timestamp.now(),
+  });
+
+  // если статус изменился — отправим уведомление
+  if (oldData?.status !== data.status) {
+    const diff = `Статус: <b>${oldData?.status || "—"}</b> → <b>${data.status}</b>`;
+
+    await fetch("/api/telegram/notify", {
+      method : "POST",
+      headers: { "Content-Type": "application/json" },
+      body   : JSON.stringify({
+        agentId: oldData?.agentId,
+        type   : "updateBooking",
+        data   : {
+          bookingNumber: oldData?.bookingNumber,
+          diff
+        }
+      })
+    }).catch(err => console.error("[tg notify] ", err));
+  }
+
+  router.push("/manager/bookings");
+};
 
   /* ---------- навигация наверху ---------- */
   const nav = [

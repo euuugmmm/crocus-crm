@@ -15,29 +15,42 @@ export default function Register() {
   const [error, setError] = useState('');
 
   const handleRegister = async (e) => {
-    e.preventDefault();
+  e.preventDefault();
 
-    try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+  try {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
 
-      // Сохраняем доп. информацию об агенте в Firestore
-      await setDoc(doc(db, 'users', user.uid), {
-        agencyName,
-        agentName,
-        email,
-        role: 'agent',
-        createdAt: new Date(),
-      });
+    await setDoc(doc(db, 'users', user.uid), {
+      agencyName,
+      agentName,
+      email,
+      role: 'agent',
+      createdAt: new Date(),
+    });
 
-      // Обновляем профиль в Firebase Auth (необязательно)
-      await updateProfile(user, { displayName: agentName });
+    // Уведомляем менеджеров
+    await fetch("/api/telegram/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        managers: true,
+        type: "newUser",
+        data: {
+          email,
+          name: agentName,
+          agentId: user.uid,
+          agencyName,
+        },
+      }),
+    }).catch(err => console.error("[tg notify → менеджеры] ", err));
 
-      router.push('/my'); // Переход на страницу агента
-    } catch (err) {
-      setError(err.message);
-    }
-  };
+    await updateProfile(user, { displayName: agentName });
+    router.push('/my');
+  } catch (err) {
+    setError(err.message);
+  }
+};
 
   return (
     <div className="p-6 max-w-md mx-auto">

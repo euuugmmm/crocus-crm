@@ -25,6 +25,7 @@ import {
 import { Badge }          from "@/components/ui/badge";
 import { DownloadTableExcel } from "react-export-table-to-excel";
 import type { Booking }   from "@/lib/types";
+import LinkTelegramButton from "@/components/LinkTelegramButton";
 
 /* ---------- константы ---------- */
 const statusOptions = [
@@ -117,7 +118,11 @@ export default function ManagerBookings() {
               </Link>
             ))}
           </nav>
-          <Button size="sm" variant="destructive" onClick={logout}>Выйти</Button>
+          <div className="flex items-center gap-4">
+      <LinkTelegramButton />      {/* ← КНОПКА */}
+      <Button size="sm" variant="destructive" onClick={logout}>Выйти</Button>
+    </div>
+  
         </div>
       </header>
 
