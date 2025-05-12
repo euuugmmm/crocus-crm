@@ -47,6 +47,7 @@ interface Props {
   agentName?:   string;
   agentAgency?: string;
   bookingNumber?: string;
+  isManager?: boolean;
 }
 
 /* ---------- справочники ---------- */
