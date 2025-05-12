@@ -3,7 +3,7 @@ module.exports = {
   i18n: {
     defaultLocale: 'ua',
     locales: ['en', 'ru', 'ua'],
-    localeDetection: false
+    localeDetection: false,
   },
   localePath: './public/locales'
 };
