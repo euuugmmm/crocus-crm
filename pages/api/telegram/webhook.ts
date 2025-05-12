@@ -23,7 +23,7 @@ export default async function handler(
 ) {
   if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
 
-  /* ---------- НИКАКОГО  getRawBody  ---------- */
+
   const body = req.body as any;          // Next.js уже распарсил JSON
   const msg  = body?.message;
   if (!msg) return res.status(200).end("no message");

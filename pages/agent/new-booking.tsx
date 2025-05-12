@@ -131,7 +131,6 @@ await fetch("/api/telegram/notify", {
 
   if (loading) return <p className="text-center mt-4">Загрузка...</p>;
 
-  /* ===================== JSX ===================== */
   return (
     <>
       {/* ---------- header ---------- */}
