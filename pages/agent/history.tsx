@@ -1,3 +1,4 @@
+// pages/agent/history.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -5,26 +6,36 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { format } from "date-fns";
 import { useAuth } from "@/context/AuthContext";
-import {
-  getAgentCommissions,
-  getAgentPayouts,
-} from "@/lib/finance";
+import { getAgentCommissions, getAgentPayouts } from "@/lib/finance";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useTranslation } from "next-i18next";
+import { serverSideTranslations } from "next-i18next/serverSideTranslations";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 
-/* ------------ helpers ------------ */
-const statusLabel: Record<string, { label: string; variant: any }> = {
-  pending:   { label: "ожидает",  variant: "default"     },
-  confirmed: { label: "подтв.",   variant: "secondary"   },
-  cancelled: { label: "отмена",   variant: "destructive" },
-};
+export async function getServerSideProps({ locale }: { locale: string }) {
+  return {
+    props: {
+      ...(await serverSideTranslations(locale, ["common"])),
+    },
+  };
+}
+
+// helper to map status → label/variant using i18n
+const buildStatusMap = (t: (k: string) => string) => ({
+  pending:   { label: t("pending"),   variant: "default" },
+  confirmed: { label: t("confirmed"), variant: "secondary" },
+  cancelled: { label: t("cancelled"), variant: "destructive" },
+});
 
 export default function AgentHistoryPage() {
+  const { t } = useTranslation("common");
   const { user, logout } = useAuth();
   const router = useRouter();
+
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"comm" | "pay">("comm");
   const [commissions, setCommissions] = useState<any[]>([]);
@@ -32,29 +43,26 @@ export default function AgentHistoryPage() {
 
   useEffect(() => {
     if (!user?.uid) return;
-    async function load() {
+    (async () => {
       setLoading(true);
       const [c, p] = await Promise.all([
         getAgentCommissions(user.uid),
         getAgentPayouts(user.uid),
       ]);
-      setCommissions(
-        c.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)),
-      );
-      setPayouts(
-        p.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)),
-      );
+      setCommissions(c.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+      setPayouts(p.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
       setLoading(false);
-    }
-    load();
+    })();
   }, [user?.uid]);
 
   const nav = [
-    { href: "/agent/bookings", label: "Мои заявки" },
-    { href: "/agent/balance", label: "Баланс" },
-    { href: "/agent/history", label: "История" },
+    { href: "/agent/bookings", label: t("navBookings") },
+    { href: "/agent/balance", label: t("navBalance") },
+    { href: "/agent/history", label: t("navHistory") },
   ];
   const isActive = (h: string) => router.pathname.startsWith(h);
+
+  const statusLabel = buildStatusMap(t);
 
   if (loading) {
     return (
@@ -67,6 +75,7 @@ export default function AgentHistoryPage() {
 
   return (
     <>
+      <LanguageSwitcher />
       {/* ---------- header ---------- */}
       <header className="w-full bg-white border-b shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -87,7 +96,7 @@ export default function AgentHistoryPage() {
             ))}
           </nav>
           <Button size="sm" variant="destructive" onClick={logout}>
-            Выйти
+            {t("logout")}
           </Button>
         </div>
       </header>
@@ -95,12 +104,12 @@ export default function AgentHistoryPage() {
       {/* ---------- content ---------- */}
       <Card className="max-w-5xl mx-auto mt-8">
         <CardContent className="p-6">
-          <h1 className="text-2xl font-bold mb-4">История операций</h1>
+          <h1 className="text-2xl font-bold mb-4">{t("operationHistory")}</h1>
 
           <Tabs defaultValue="comm" value={tab} onValueChange={(v) => setTab(v as any)}>
             <TabsList className="mb-4">
-              <TabsTrigger value="comm">Комиссии</TabsTrigger>
-              <TabsTrigger value="pay">Выплаты</TabsTrigger>
+              <TabsTrigger value="comm">{t("commission")}</TabsTrigger>
+              <TabsTrigger value="pay">{t("payout")}</TabsTrigger>
             </TabsList>
 
             {/* ---------- COMMISSIONS ---------- */}
@@ -108,10 +117,10 @@ export default function AgentHistoryPage() {
               <table className="min-w-full text-sm border">
                 <thead className="bg-gray-50 text-left">
                   <tr>
-                    <th className="px-2 py-1 border">Дата</th>
-                    <th className="px-2 py-1 border">Заявка</th>
-                    <th className="px-2 py-1 border">Сумма (€)</th>
-                    <th className="px-2 py-1 border">Статус</th>
+                    <th className="px-2 py-1 border">{t("date")}</th>
+                    <th className="px-2 py-1 border">{t("bookingNumber")}</th>
+                    <th className="px-2 py-1 border">{t("amount")}</th>
+                    <th className="px-2 py-1 border">{t("status")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -126,7 +135,7 @@ export default function AgentHistoryPage() {
                       </td>
                       <td className="px-2 py-1 border">
                         <Badge variant={statusLabel[c.status]?.variant || "outline"}>
-                          {statusLabel[c.status]?.label || c.status || "неизвестно"}
+                          {statusLabel[c.status]?.label || t("unknown")}
                         </Badge>
                       </td>
                     </tr>
@@ -134,7 +143,7 @@ export default function AgentHistoryPage() {
                   {commissions.length === 0 && (
                     <tr>
                       <td colSpan={4} className="py-6 text-center text-muted-foreground">
-                        Комиссий нет
+                        {t("noCommissions")}
                       </td>
                     </tr>
                   )}
@@ -147,9 +156,9 @@ export default function AgentHistoryPage() {
               <table className="min-w-full text-sm border">
                 <thead className="bg-gray-50 text-left">
                   <tr>
-                    <th className="px-2 py-1 border">Дата</th>
-                    <th className="px-2 py-1 border">Сумма (€)</th>
-                    <th className="px-2 py-1 border">Комментарий</th>
+                    <th className="px-2 py-1 border">{t("date")}</th>
+                    <th className="px-2 py-1 border">{t("amount")}</th>
+                    <th className="px-2 py-1 border">{t("comment")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -167,7 +176,7 @@ export default function AgentHistoryPage() {
                   {payouts.length === 0 && (
                     <tr>
                       <td colSpan={3} className="py-6 text-center text-muted-foreground">
-                        Выплат нет
+                        {t("noPayouts")}
                       </td>
                     </tr>
                   )}

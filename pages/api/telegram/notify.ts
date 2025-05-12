@@ -1,32 +1,28 @@
+/* pages/api/telegram/notify.ts -------------------------------- */
 import type { NextApiRequest, NextApiResponse } from "next";
-import { adminDB } from "@/lib/admin";
+import { adminDB } from "@/lib/firebaseAdmin";
 
-const BOT = process.env.TELEGRAM_BOT_TOKEN!;
-const BOT_URL = `https://api.telegram.org/bot${BOT}/sendMessage`;
+const BOT_URL = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
 
-async function send(chatId: number | string, text: string) {
-  await fetch(BOT_URL, {
-    method: "POST",
+const send = (chatId: number | string, text: string) =>
+  fetch(BOT_URL, {
+    method : "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+    body   : JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
   });
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end();
 
   const { agentId, managers, type, data } = req.body;
 
-  /* --- уведомление агенту --- */
+  /* --- агенту --- */
   if (agentId) {
     const user = (await adminDB.doc(`users/${agentId}`).get()).data() as any;
-    if (user?.tgChatId) {
-      const msg = makeText(type, data);
-      if (msg) await send(user.tgChatId, msg);
-    }
+    if (user?.tgChatId) await send(user.tgChatId, makeText(type, data));
   }
 
-  /* --- уведомление всем менеджерам --- */
+  /* --- менеджерам --- */
   if (managers) {
     const snap = await adminDB.collection("users")
       .where("role", "==", "manager")
@@ -34,36 +30,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .get();
 
     const msg = makeText(type, data);
-    if (msg) {
-      const promises = snap.docs.map(doc => send(doc.data().tgChatId, msg));
-      await Promise.all(promises);
-    }
+    await Promise.all(snap.docs.map(d => send(d.data().tgChatId, msg)));
   }
 
   res.status(200).end("ok");
 }
 
-/* ---------- шаблоны сообщений ---------- */
-function makeText(type: string, data: any): string | null {
-  if (type === "newBooking") {
-    return (
-      `🆕 <b>Новая заявка</b>\n` +
-      `№ <b>${data.bookingNumber || "—"}</b>\n` +
-      `${data.hotel || ""} / ${data.operator || ""}\n` +
-      `Даты: ${data.checkIn || "—"} – ${data.checkOut || "—"}\n` +
-      `Статус: <b>${data.status || "Новая"}</b>\n` +
-      `Агент: ${data.agentName || "—"} (${data.agentAgency || "—"})`
-    );
-  }
+/* шаблоны ------------------------------------------------------ */
+function makeText(type: string, d: any): string {
+  if (type === "newBooking")
+    return `🆕 <b>Новая заявка</b>
+№ <b>${d.bookingNumber || "—"}</b>
+${d.hotel || ""} / ${d.operator || ""}
+Даты: ${d.checkIn || "—"} – ${d.checkOut || "—"}
+Статус: <b>${d.status || "Новая"}</b>
+Агент: ${d.agentName || "—"} (${d.agentAgency || "—"})`;
 
-  if (type === "newUser") {
-    return (
-      `👤 <b>Новая регистрация</b>\n` +
-      `Агентство: <b>${data.agencyName}</b>\n` +
-      `Имя: <b>${data.name}</b>\n` +
-      `Email: ${data.email}`
-    );
-  }
+  if (type === "newUser")
+    return `👤 <b>Новая регистрация</b>
+Агентство: <b>${d.agencyName}</b>
+Имя: <b>${d.name}</b>
+Email: ${d.email}`;
 
-  return null;
+  return "⚠️ Неподдерживаемый тип уведомления.";
 }

@@ -1,0 +1,120 @@
+import { useState } from "react";
+import { useRouter } from "next/router";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { doc, setDoc } from "firebase/firestore";
+import { auth, db } from "../firebase";
+import { useTranslation } from "next-i18next";
+import { serverSideTranslations } from "next-i18next/serverSideTranslations";
+import Head from "next/head";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+
+export async function getServerSideProps({ locale }: { locale: string }) {
+  return {
+    props: {
+      ...(await serverSideTranslations(locale, ["common"]))
+    }
+  };
+}
+
+export default function Register() {
+  const { t } = useTranslation("common");
+  const router = useRouter();
+
+  const [agencyName, setAgencyName] = useState("");
+  const [agentName, setAgentName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      await setDoc(doc(db, "users", user.uid), {
+        agencyName,
+        agentName,
+        email,
+        role: "agent",
+        createdAt: new Date(),
+      });
+
+      await fetch("/api/telegram/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          managers: true,
+          type: "newUser",
+          data: {
+            email,
+            name: agentName,
+            agentId: user.uid,
+            agencyName,
+          },
+        }),
+      }).catch(err => console.error("[tg notify → менеджеры]", err));
+
+      await updateProfile(user, { displayName: agentName });
+      router.push("/agent/bookings");
+    } catch (err: any) {
+      setError(err.message || "Ошибка регистрации");
+    }
+  };
+
+  return (
+    <>
+      <Head>
+        <title>{`Crocus CRM – ${t("register")}`}</title>
+      </Head>
+      <LanguageSwitcher />
+      <div className="p-6 max-w-md mx-auto">
+        <h1 className="text-2xl font-semibold mb-4 text-center">
+          {t("registerAgent")}
+        </h1>
+        {error && <p className="text-red-500 mb-4 text-center">{error}</p>}
+        <form onSubmit={handleRegister} className="space-y-4">
+          <input
+            type="text"
+            placeholder={t("agencyName")}
+            value={agencyName}
+            onChange={(e) => setAgencyName(e.target.value)}
+            required
+            className="w-full border p-2 rounded"
+          />
+          <input
+            type="text"
+            placeholder={t("agentName")}
+            value={agentName}
+            onChange={(e) => setAgentName(e.target.value)}
+            required
+            className="w-full border p-2 rounded"
+          />
+          <input
+            type="email"
+            placeholder={t("email")}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="w-full border p-2 rounded"
+          />
+          <input
+            type="password"
+            placeholder={t("password")}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            className="w-full border p-2 rounded"
+          />
+          <button
+            type="submit"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white p-2 rounded"
+          >
+            {t("register")}
+          </button>
+        </form>
+      </div>
+    </>
+  );
+}

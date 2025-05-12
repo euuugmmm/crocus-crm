@@ -14,19 +14,28 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useTranslation } from "next-i18next";
+
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+
+import { serverSideTranslations } from "next-i18next/serverSideTranslations";
+
+export async function getServerSideProps({ locale }: { locale: string }) {
+  return {
+    props: {
+      ...(await serverSideTranslations(locale, ["common"])),
+    },
+  };
+}
 
 type Row =
   | { type: "commission"; id: string; date: Date; amount: number; status: string; bookingNumber?: string }
   | { type: "payout"; id: string; date: Date; amount: number };
 
-const opLabel: Record<Row["type"], string> = {
-  commission: "Комиссия",
-  payout: "Выплата",
-};
-
 export default function AgentBalancePage() {
   const { user, logout } = useAuth();
   const router = useRouter();
+  const { t } = useTranslation("common");
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(0);
   const [pendingSum, setPendingSum] = useState(0);
@@ -44,7 +53,6 @@ export default function AgentBalancePage() {
 
       setBalance(bal);
 
-      // Мы больше не используем статус pending — только завершённые комиссии
       setPendingSum(0);
 
       const ops: Row[] = [
@@ -73,11 +81,16 @@ export default function AgentBalancePage() {
   }, [user?.uid]);
 
   const nav = [
-    { href: "/agent/bookings", label: "Заявки" },
-    { href: "/agent/balance", label: "Баланс" },
-    { href: "/agent/history", label: "История" },
+    { href: "/agent/bookings", label: t("navBookings") },
+    { href: "/agent/balance", label: t("navBalance") },
+    { href: "/agent/history", label: t("navHistory") },
   ];
   const isActive = (h: string) => router.pathname.startsWith(h);
+
+  const opLabel: Record<Row["type"], string> = {
+    commission: t("commission"),
+    payout: t("payout"),
+  };
 
   if (loading) {
     return (
@@ -90,7 +103,7 @@ export default function AgentBalancePage() {
 
   return (
     <>
-      {/* ---------- header ---------- */}
+      <LanguageSwitcher />
       <header className="w-full bg-white border-b shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <span className="font-bold text-lg">CROCUS&nbsp;CRM</span>
@@ -110,39 +123,35 @@ export default function AgentBalancePage() {
             ))}
           </nav>
           <Button size="sm" variant="destructive" onClick={logout}>
-            Выйти
+            {t("logout")}
           </Button>
         </div>
       </header>
 
-      {/* ---------- balance card ---------- */}
       <Card className="max-w-4xl mx-auto mt-8">
         <CardContent className="p-6 flex flex-col gap-6">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xl font-semibold mb-1">Доступно к выплате</h2>
+              <h2 className="text-xl font-semibold mb-1">{t("balanceAvailable")}</h2>
               <p className="text-3xl font-bold">{balance.toFixed(2)} €</p>
             </div>
             {pendingSum > 0 && (
               <div>
-                <p className="text-sm text-muted-foreground">
-                  Ожидает подтверждения
-                </p>
+                <p className="text-sm text-muted-foreground">{t("pending")}</p>
                 <p className="text-lg">{pendingSum.toFixed(2)} €</p>
               </div>
             )}
           </div>
 
-          {/* ---------- last operations ---------- */}
-          <h3 className="text-lg font-semibold">Последние операции</h3>
+          <h3 className="text-lg font-semibold">{t("recentOperations")}</h3>
           <table className="min-w-full text-sm border">
             <thead className="bg-gray-50 text-left">
               <tr>
-                <th className="px-2 py-1 border">Дата</th>
-                <th className="px-2 py-1 border">№ заявки</th>
-                <th className="px-2 py-1 border">Тип</th>
-                <th className="px-2 py-1 border">Сумма (€)</th>
-                <th className="px-2 py-1 border">Статус</th>
+                <th className="px-2 py-1 border">{t("date")}</th>
+                <th className="px-2 py-1 border">{t("bookingNumber")}</th>
+                <th className="px-2 py-1 border">{t("type")}</th>
+                <th className="px-2 py-1 border">{t("amount")}</th>
+                <th className="px-2 py-1 border">{t("status")}</th>
               </tr>
             </thead>
             <tbody>
@@ -155,18 +164,18 @@ export default function AgentBalancePage() {
                   <td className="px-2 py-1 border">{opLabel[r.type]}</td>
                   <td className="px-2 py-1 border">{r.amount.toFixed(2)}</td>
                   <td className="px-2 py-1 border">
-  {r.type === "commission" ? (
-    <Badge className="bg-yellow-200 text-yellow-700">Зачислено</Badge>
-  ) : (
-    <Badge className="bg-green-200 text-green-700">Выплачено</Badge>
-  )}
-</td>
+                    {r.type === "commission" ? (
+                      <Badge className="bg-yellow-200 text-yellow-700">{t("credited")}</Badge>
+                    ) : (
+                      <Badge className="bg-green-200 text-green-700">{t("paidOut")}</Badge>
+                    )}
+                  </td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-2 py-4 text-center text-muted-foreground">
-                    Операций пока нет
+                    {t("noOperations")}
                   </td>
                 </tr>
               )}
