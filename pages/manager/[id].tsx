@@ -1,4 +1,4 @@
-/* pages/manager/[id].tsx */
+// pages/manager/[id].tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -55,37 +55,37 @@ export default function EditBookingPage() {
 
   /* ---------- update booking (данные из формы) ---------- */
   const saveBooking = async (data: any) => {
-  if (!id) return;
+    if (!id) return;
 
-  const ref = doc(db, "bookings", id as string);
-  const oldSnap = await getDoc(ref);
-  const oldData = oldSnap.data();
+    const ref     = doc(db, "bookings", id as string);
+    const oldSnap = await getDoc(ref);
+    const oldData = oldSnap.data() as any;
 
-  await updateDoc(ref, {
-    ...data,
-    updatedAt: Timestamp.now(),
-  });
+    // Обновляем документ в Firestore
+    await updateDoc(ref, {
+      ...data,
+      updatedAt: Timestamp.now(),
+    });
 
-  // если статус изменился — отправим уведомление
-  if (oldData?.status !== data.status) {
-    const diff = `Статус: <b>${oldData?.status || "—"}</b> → <b>${data.status}</b>`;
+    // Если статус изменился — отправляем уведомление агенту
+    if (oldData?.status !== data.status) {
+      await fetch("/api/telegram/notify", {
+        method : "POST",
+        headers: { "Content-Type": "application/json" },
+        body   : JSON.stringify({
+          agentId: oldData.agentId,
+          type   : "statusChanged",
+          data   : {
+            bookingNumber: oldData.bookingNumber,
+            oldStatus    : oldData.status,
+            newStatus    : data.status,
+          }
+        }),
+      }).catch(err => console.error("[tg notify] ", err));
+    }
 
-    await fetch("/api/telegram/notify", {
-      method : "POST",
-      headers: { "Content-Type": "application/json" },
-      body   : JSON.stringify({
-        agentId: oldData?.agentId,
-        type   : "updateBooking",
-        data   : {
-          bookingNumber: oldData?.bookingNumber,
-          diff
-        }
-      })
-    }).catch(err => console.error("[tg notify] ", err));
-  }
-
-  router.push("/manager/bookings");
-};
+    router.push("/manager/bookings");
+  };
 
   /* ---------- навигация наверху ---------- */
   const nav = [
@@ -149,11 +149,8 @@ export default function EditBookingPage() {
 
         {/* --- загрузка / просмотр ваучеров --- */}
         <UploadVouchers
-          /** id документа в Firestore          */
           bookingDocId={id as string}
-          /** human-readable номер (для имени файла) */
           bookingNumber={booking.bookingNumber || ""}
-          /** текущий массив ссылок (doc.voucherLinks) */
           links={booking.voucherLinks || []}
         />
       </div>

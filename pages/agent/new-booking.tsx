@@ -1,5 +1,4 @@
-/* pages/agent/new-booking.tsx
-   ─────────────────────────────────────────────────────────── */
+// pages/agent/new-booking.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -93,7 +92,29 @@ export default function NewBooking() {
       createdAt  : Timestamp.now(),
     };
 
+    // сохраняем заявку в Firestore
     await addDoc(collection(db, "bookings"), bookingData);
+
+    // уведомляем агента и менеджеров
+    await fetch("/api/telegram/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agentId  : user!.uid,
+        managers : true,
+        type     : "newBooking",
+        data     : {
+          bookingNumber: bookingData.bookingNumber,
+          hotel        : bookingData.hotel,
+          operator     : bookingData.operator,
+          checkIn      : bookingData.checkIn,
+          checkOut     : bookingData.checkOut,
+          agentName    : bookingData.agentName,
+          agentAgency  : bookingData.agentAgency,
+        },
+      }),
+    });
+
     router.push("/agent/bookings");
   }
 

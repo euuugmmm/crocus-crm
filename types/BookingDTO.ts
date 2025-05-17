@@ -1,37 +1,28 @@
 // types/BookingDTO.ts
-
-export interface BookingDTO {
+export interface Booking {
   id?: string;
-  bookingNumber?: string;
-  operator?: string;
-  region?: string;
-  hotel?: string;
-  checkIn?: string;      // дата заезда
-  checkOut?: string;     // дата выезда
-  room?: string;
-  tourists?: { name: string; dob: string }[];
-
-  bruttoClient?: number;
-  bruttoOperator?: number;
-  nettoOperator?: number;
-  internalNet?: number;
-
-  commission?: number;          // комиссия агента
-  bankFeeAmount?: number;       // комиссия банка
-  paymentMethod?: "card" | "iban";
-  comment?: string;
-  invoiceLink?: string;
-  status?: string;
-
+  bookingNumber: string;
+  date: string;
+  market: "Romania" | "Ukraine" | "IgorBase";
+  clientName: string;
+  agentId?: string;
   agentName?: string;
   agentAgency?: string;
-  crocusProfit?: number;
-
-  createdAt?: string;
-  updatedAt?: string;
-
-  market?: string;             // "Украинский рынок", "Румынский рынок", etc.
-  source?: string;             // Прямой/Агент
-  category?: string;           // Категория для учёта
-  invoiceIban?: string;        // IBAN куда платит клиент
+  bookingType?: "subagent" | "igor" | "romania";
+  category?: string;
+  currency: string;
+  salePrice: number;
+  supplierCost: number;
+  agentCommission?: number;
+  bankFees?: number;
+  operatorCommission?: number;
+  netProfit?: number;
+  status: "Open" | "Closed" | "Cancelled";
+  createdAt?: any;
+  updatedAt?: any;
+  founderShareScheme?: {
+    igor: number;
+    evgeniy: number;
+  };
+  transactionsIds?: string[];
 }
