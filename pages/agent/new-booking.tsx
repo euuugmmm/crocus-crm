@@ -1,37 +1,33 @@
-/* pages/agent/new-booking.tsx
-   ─────────────────────────────────────────────────────────── */
+// pages/agent/new-booking.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import {
-  collection,
-  addDoc,
+  doc,
+  setDoc,
   Timestamp,
   runTransaction,
-  doc,
   increment,
 } from "firebase/firestore";
 
-import { db }            from "@/firebaseConfig";
-import { useAuth }       from "@/context/AuthContext";
-import BookingForm       from "@/components/BookingFormAgent";
-import { Button }        from "@/components/ui/button";
-import LanguageSwitcher  from "@/components/LanguageSwitcher";
-import { useTranslation } from "next-i18next";
+import { db }              from "@/firebaseConfig";
+import { useAuth }         from "@/context/AuthContext";
+import BookingForm         from "@/components/BookingFormAgent";
+import { Button }          from "@/components/ui/button";
+import LanguageSwitcher    from "@/components/LanguageSwitcher";
+import { useTranslation }  from "next-i18next";
 import { serverSideTranslations } from "next-i18next/serverSideTranslations";
 
-/* ─────────────────────────────────────────────────────────── */
+/* ─── i18n ────────────────────────────────────────────────────────────── */
 export async function getServerSideProps({ locale }: { locale: string }) {
   return {
-    props: {
-      ...(await serverSideTranslations(locale, ["common"])),
-    },
+    props: { ...(await serverSideTranslations(locale, ["common"])) },
   };
 }
-/* ─────────────────────────────────────────────────────────── */
 
+/* ─── page ───────────────────────────────────────────────────────────── */
 export default function NewBooking() {
   const router = useRouter();
   const { user, userData, loading, isAgent, logout } = useAuth();
@@ -39,17 +35,16 @@ export default function NewBooking() {
 
   const [bookingNumber, setBookingNumber] = useState<string>("");
 
-  /* guards */
+  /* guards + генерация номера */
   useEffect(() => {
     if (loading) return;
-    if (!user)            { router.replace("/login"); return; }
-    if (!isAgent)         { router.replace("/manager/bookings"); return; }
+    if (!user)        { router.replace("/login"); return; }
+    if (!isAgent)     { router.replace("/manager/bookings"); return; }
     generateBookingNumber();
   }, [user, loading, isAgent]);
 
-  /* номер */
   async function generateBookingNumber() {
-    const ref = doc(db, "counters", "bookingNumber");
+    const ref  = doc(db, "counters", "bookingNumber");
     const next = await runTransaction(db, async (tr) => {
       const snap = await tr.get(ref);
       const cur  = snap.data()?.value ?? 1000;
@@ -77,25 +72,48 @@ export default function NewBooking() {
     return { agent: +commission.toFixed(2), bankFee: +bankFee.toFixed(2) };
   }
 
-  /* create */
-  async function handleCreate(formData: any) {
-    const { agent, bankFee } = calcCommission(formData);
+  /* create booking + telegram notify */
+  async function handleCreate(form: any) {
+    const { agent, bankFee } = calcCommission(form);
 
-    const bookingData = {
-      bookingNumber,
-      ...formData,
-      commission : agent,
-      bankFee,
-      agentId    : user!.uid,
-      agentName  : userData?.agentName  ?? userData?.name  ?? "",
-      agentAgency: userData?.agencyName ?? userData?.agency ?? "",
-      status     : "new",
-      createdAt  : Timestamp.now(),
-    };
+    await setDoc(
+      doc(db, "bookings", bookingNumber),               // ID = номер заявки
+      {
+        bookingNumber,
+        ...form,
+        commission : agent,
+        bankFee,
+        agentId    : user!.uid,
+        agentName  : userData?.agentName  ?? "",
+        agentAgency: userData?.agencyName ?? "",
+        status     : "new",
+        createdAt  : Timestamp.now(),
+      },
+      { merge: true }                                   // не затираем screenshotLinks
+    );
 
-    await addDoc(collection(db, "bookings"), bookingData);
-    router.push("/agent/bookings");
+    /* уведомляем агента и всех менеджеров */
+    await fetch("/api/telegram/notify", {
+      method : "POST",
+      headers: { "Content-Type": "application/json" },
+      body   : JSON.stringify({
+        agentId : user!.uid,
+        managers: true,
+        type    : "newBooking",
+        data    : {
+          bookingNumber,
+          hotel      : form.hotel     || "—",
+          operator   : form.operator  || "—",
+          agentName  : userData?.agentName  ?? "",
+          agentAgency: userData?.agencyName ?? "",
+        },
+      }),
+    }).catch(err => console.error("[tg notify]", err));
   }
+
+  /* UI guards */
+  if (loading || !bookingNumber)
+    return <p className="text-center mt-4">…</p>;
 
   /* nav */
   const nav = [
@@ -105,13 +123,12 @@ export default function NewBooking() {
   ];
   const isActive = (h: string) => router.pathname.startsWith(h);
 
-  if (loading) return <p className="text-center mt-4">...</p>;
-
   /* render */
   return (
     <>
       <LanguageSwitcher />
 
+      {/* header */}
       <header className="w-full bg-white border-b shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <span className="font-bold text-lg">{t("brand")}</span>
@@ -138,15 +155,15 @@ export default function NewBooking() {
         </div>
       </header>
 
+      {/* content */}
       <div className="max-w-3xl mx-auto p-4">
         <h1 className="text-2xl font-bold mb-4">{t("newBookingHeader")}</h1>
 
         <BookingForm
           onSubmit={handleCreate}
-          isManager={false}
-          agentName={userData?.agentName  ?? ""}
-          agentAgency={userData?.agencyName ?? ""}
           bookingNumber={bookingNumber}
+          agentName={userData?.agentName ?? ""}
+          agentAgency={userData?.agencyName ?? ""}
         />
       </div>
     </>

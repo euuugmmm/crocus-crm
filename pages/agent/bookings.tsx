@@ -20,7 +20,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import LinkTelegramButton from "@/components/LinkTelegramButton";
 import { useTranslation } from "next-i18next";
 import { serverSideTranslations } from "next-i18next/serverSideTranslations";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
@@ -117,7 +116,20 @@ export default function AgentBookingsPage() {
             ))}
           </nav>
           <div className="flex items-center gap-4">
-            <LinkTelegramButton />
+          <Link href="/agent/profile" locale={router.locale}>
+            <Button
+              size="sm"
+              className="
+                bg-yellow-500 text-white
+                px-4 py-2 rounded-lg shadow
+                hover:bg-yellow-600
+                transition-colors
+                focus:outline-none focus:ring-2 focus:ring-orange-300
+              "
+            >
+              {t("profile")}
+            </Button>
+          </Link>
             <Button size="sm" variant="destructive" onClick={logout}>
               {t("logout")}
             </Button>
