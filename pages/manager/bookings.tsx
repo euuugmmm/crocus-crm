@@ -151,6 +151,7 @@ const filtered = bookings.filter((b) => {
     { href: "/manager/bookings", label: t("navBookings") },
     { href: "/manager/balances", label: t("navBalance") },
     { href: "/manager/payouts", label: t("navPayouts") },
+    { href: "/manager/users", label: t("navUsers") },
   ];
   const isActive = (h: string) => router.pathname.startsWith(h);
 

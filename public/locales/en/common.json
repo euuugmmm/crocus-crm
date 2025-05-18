@@ -125,7 +125,34 @@
   "delete": "delete",
   "noScreenshots": "no screenshots uploaded yet",
   "confirmDelete": "Delete this screenshot?",
-  "chooseFiles": "Choose files"
+  "chooseFiles": "Choose files",
+  "contracts": "Contract",
+  "contractInstructions": "1) Click 'Generate Contract', print and sign it. \n 2) Upload the signed PDF here.",
+  "generateContract": "Generate Contract",
+  "lastContract": "Last contract:",
+  "noContracts": "No contract has been created yet",
+  "upload": "Upload",
+  "signedUploaded": "Signed contract uploaded",
+  "signedContract": {
+    "title": "Signed Contract",
+    "explain": "Upload a scan or photo of the signed contract (PDF).",
+    "already": "Already uploaded:"
+  },
+  "download": "Download",
+  "Telegram": "Telegram",
+  "view": "View",
+    "navUsers": "Users",
+  "usersTitle": "User List",
+  "agentNo": "Agent No.",
+  "contractGen": "Draft",
+  "contractSigned": "Signed",
+  "no": "no",
+  "passport": "Passport Number",
+  "cnp": "Personal number",
+  "bookingsCnt": "Bookings",
+  "notifyLang": "Notification lang.",
+  "contract": "Contract"
+
 
 
 }

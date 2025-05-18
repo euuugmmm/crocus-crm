@@ -126,6 +126,36 @@
   "delete": "видалити",
   "noScreenshots": "скріншоти ще не завантажені",
     "chooseFiles": "Вибрати файли",        
-  "confirmDelete": "Видалити цей скріншот?"
+  "confirmDelete": "Видалити цей скріншот?",
+  "navUsers": "Користувачі",
+  "usersTitle": "Список користувачів",
+  "agentNo": "№ агента",
+  "contractGen": "Чернетка",
+  "contractSigned": "Підписано",
+  "no": "ні",
+  "contracts": "Договір",
+  "Telegram": "Telegram",
+  "contractInstructions": "1) Натисніть «Згенерувати договір», роздрукуйте та підпишіть його. \n 2) Завантажте підписаний PDF тут.",
+  "generateContract": "Згенерувати договір",
+  "lastContract": "Останній договір:",
+  "noContracts": "Договір ще не створено",
+  "upload": "Завантажити",
+  "signedUploaded": "Підписаний договір завантажено",
+  "signedContract": {
+    "title": "Підписаний договір",
+    "explain": "Завантажте скан або фото підписаного договору (PDF).",
+    "already": "Вже завантажено:"
+  },
+  "download": "Завантажити",
+  "view": "Переглянути",
+  "passport": "Номер паспорта",
+  "cnp": "Особистий номер",
+  "users": "Користувачі",
+  "address":      "Адрес",
+  "bookingsCnt": "Заявок",
+  "notifyLang": "Мова сповіщень",
+  "contract": "Договір"
+
+
 
 }

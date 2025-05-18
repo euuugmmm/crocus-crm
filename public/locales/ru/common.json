@@ -127,7 +127,35 @@
   "delete": "удалить",
   "noScreenshots": "скриншоты пока не загружены",
   "chooseFiles": "Выбрать файлы" ,
-  "confirmDelete": "Удалить этот скриншот?"
-
+  "confirmDelete": "Удалить этот скриншот?",
+ 
+  "contracts"            : "Договор",
+  "contractInstructions" : "1) Нажмите «Сгенерировать договор», распечатайте и подпишите. \n 2) Загрузите подписанный PDF здесь.",
+  "generateContract"     : "Сгенерировать договор",
+  "lastContract"         : "Последний договор:",
+  "noContracts"          : "Договор ещё не создан",
+  "upload"               : "Загрузить",
+  "signedUploaded"       : "Подписанный договор загружен",
+  "signedContract" : {
+    "title"   : "Подписанный договор",
+    "explain" : "Загрузите скан/фото подписанного договора (PDF).",
+    "already" : "Уже загружен:"
+  },
+  "Telegram": "Telegram",
+  "download"            : "Скачать",
+  "view"            : "Посмотреть",
+  "navUsers"        : "Пользователи",
+  "usersTitle"      : "Список пользователей",
+  "agentNo"         : "№ агента",
+  "contractGen"     : "Черновик",
+  "contractSigned"  : "Подписан",
+  "no"              : "нет",
+  "passport": "Номер паспорта",
+  "address":      "Адрес",
+  "cnp": "Личный номер",
+  "bookingsCnt":     "Заявок",
+  "notifyLang":      "Яз. увед.",
+  "contract":        "Договор"
+  
 
 }
