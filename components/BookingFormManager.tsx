@@ -3,6 +3,7 @@
 
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "next-i18next";
+import { format } from "date-fns";
 
 /* ---------- типы ---------- */
 export interface Tourist {
@@ -59,6 +60,15 @@ interface Props {
   bookingNumber?: string;
   isManager?: boolean;
 }
+ // Helper to calculate age in years from dob
+  const calculateAge = (dob: string) => {
+    const birth = new Date(dob);
+    const now = new Date();
+    let age = now.getFullYear() - birth.getFullYear();
+    const m = now.getMonth() - birth.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) age--;
+    return age;
+  };
 
 /* ---------- справочники ---------- */
 const OPERATORS = [
@@ -136,6 +146,11 @@ export default function BookingFormManager({
   const [attachments, setAttachments] = useState<File[]>(
     initialData.attachments ?? []
   );
+  
+  const formatDate = (dateStr?: string) =>
+  dateStr
+    ? format(new Date(dateStr), "dd.MM.yyyy")
+    : "—";
 
   /* ---------- вычисления комиссии & банковской комиссии ---------- */
   const opInfo = OPERATORS.find((o) => o.val === operator);
@@ -235,12 +250,42 @@ export default function BookingFormManager({
   return (
     <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 rounded-lg shadow">
 
-      {/* ------- инфо об агенте ------- */}
-      <div className="bg-gray-100 p-3 rounded text-sm text-gray-700">
-        <p><strong>Агент:</strong> {agentName}</p>
-        <p><strong>Агентство:</strong> {agentAgency}</p>
-        <p><strong>Заявка №:</strong> {bookingNumber}</p>
+
+ {/* ------- summary block ------- */}
+<div className="p-4 bg-gray-100 rounded-lg border space-y-4">
+  <h2 className="text-lg font-semibold">Информация о заявке</h2>
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+    <p><strong>Агент:</strong> {agentName}</p>
+    <p><strong>Агентство:</strong> {agentAgency}</p>
+    <p><strong>Оператор:</strong> {operator}</p>
+    <p><strong>Направление:</strong> {region}</p>
+    <p><strong>Город вылета:</strong> {departureCity}</p>
+    <p><strong>Город прилёта:</strong> {arrivalCity}</p>
+    <p><strong>Отель:</strong> {hotel}</p>
+    <p><strong>Период:</strong> {formatDate(checkIn)} → {formatDate(checkOut)}</p>
+    <p><strong>Комната:</strong> {room}</p>
+    <p><strong>Питание:</strong> {mealPlan}</p>
+    
+    <div className="col-span-full">
+      <strong>Туристы:</strong>
+      <div className="mt-1 space-y-1 ml-4 text-sm">
+        {tourists.map((t, i) => (
+          <p key={i}>
+            {t.name} ({calculateAge(t.dob)}) {formatDate(t.dob)} 
+          </p>
+        ))}
       </div>
+    </div>
+        <p>
+      <strong>
+        {opInfo?.allowNet ? "Netto оператора" : "Brutto оператора"}:
+      </strong>{" "}
+      {opInfo?.allowNet
+        ? `${parseFloat(nettoOperator).toFixed(2)} €`
+        : `${parseFloat(bruttoOperator).toFixed(2)} €`}
+    </p>
+  </div>
+</div>
 
       {/* ------- оператор + направление ------- */}
       <div className="grid grid-cols-2 gap-4">
