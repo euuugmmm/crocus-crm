@@ -107,7 +107,6 @@ export default function NewBooking() {
         bookingNumber,
         ...form,
         commission: agent,
-        commissionPaid: false,
         bankFee,
         agentId: user!.uid,
         agentName: userData?.agentName ?? "",
