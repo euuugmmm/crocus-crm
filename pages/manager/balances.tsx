@@ -1,40 +1,42 @@
+// pages/manager/balances.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { getAgentBalances } from "@/lib/finance";
+import { getAllBalances, AgentDoc } from "@/lib/finance";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
-/* -------------------------------------------------- */
+type AgentWithBalance = AgentDoc & { balance: number };
 
 export default function ManagerBalances() {
   const { user, isManager, logout } = useAuth();
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [agents, setAgents] = useState<any[]>([]);
+  const [agents, setAgents] = useState<AgentWithBalance[]>([]);
 
-  /* ---------- data load ---------- */
   useEffect(() => {
     if (!user || !isManager) return;
     setLoading(true);
-    getAgentBalances()
+    getAllBalances()
       .then(setAgents)
+      .catch(err => {
+        console.error("Ошибка при загрузке балансов:", err);
+        setAgents([]);
+      })
       .finally(() => setLoading(false));
   }, [user, isManager]);
 
-  /* ---------- top-nav ---------- */
   const nav = [
     { href: "/manager/bookings", label: "Заявки" },
     { href: "/manager/balances", label: "Балансы" },
-    { href: "/manager/payouts",  label: "Выплаты" },
+    { href: "/manager/payouts", label: "Выплаты" },
   ];
   const isActive = (h: string) => router.pathname.startsWith(h);
 
-  /* ---------- render ---------- */
   return (
     <>
       {/* header */}
@@ -90,22 +92,22 @@ export default function ManagerBalances() {
                   </td>
                 </tr>
               ) : (
-                agents.map((a) => (
-                  <tr key={a.id} className="border-t hover:bg-gray-50">
-                    <td className="px-2 py-1 border">{a.agencyName || a.agency}</td>
-                    <td className="px-2 py-1 border">{a.agentName || a.name}</td>
-                    <td className="px-2 py-1 border text-right">
-                      {a.balance?.toFixed(2) || "0.00"}
-                    </td>
-                    <td className="px-2 py-1 border text-center">
-                      <Button
-                        size="sm"
-                        onClick={() => router.push(`/manager/payouts?agent=${a.id}`)}
-                      >
-                        Создать выплату
-                      </Button>
-                    </td>
-                  </tr>
+    agents.map((a) => (
+      <tr key={a.id} className="border-t hover:bg-gray-50">
+        <td className="px-2 py-1 border">{a.agencyName || "—"}</td>
+        <td className="px-2 py-1 border">{a.agentName || "—"}</td>
+        <td className="px-2 py-1 border text-right">{a.balance.toFixed(2)}</td>
+        <td className="px-2 py-1 border text-center">
+          <Button
+            size="sm"
+            variant="default"
+            className="px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg shadow hover:bg-indigo-700 hover:shadow-lg transition-colors"
+            onClick={() => router.push(`/manager/payouts?agent=${a.id}`)}
+          >
+            Создать выплату
+          </Button>
+        </td>
+      </tr>
                 ))
               )}
             </tbody>

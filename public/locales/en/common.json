@@ -151,7 +151,34 @@
   "cnp": "Personal number",
   "bookingsCnt": "Bookings",
   "notifyLang": "Notification lang.",
-  "contract": "Contract"
+  "contract": "Contract",
+
+  
+  "title": "CROCUS CRM",
+  "back": "Back",
+  "loadingBooking": "Loading booking…",
+  "bookingInfo": "Booking Information",
+  "labelBookingNo": "Booking №",
+  "labelOperator": "Operator",
+  "labelRegion": "Route",
+  "labelDeparture": "Departure city",
+  "labelArrival": "Arrival city",
+  "labelHotel": "Hotel",
+  "labelPeriod": "Period",
+  "labelRoom": "Room",
+  "labelBrutto": "Brutto",
+  "labelMeal": "Meal plan",
+  "labelStatus": "Status",
+  "labelName": "Name",
+  "labelAge": "Age",
+  "labelDOB": "Date of birth",
+  "labelNationality": "Nationality",
+  "labelPassportNo": "Passport №",
+  "labelPassportValid": "Valid until",
+  "placeholderComment": "Your comment…",
+  "send": "Send",
+  "sending": "Sending…"
+
 
 
 

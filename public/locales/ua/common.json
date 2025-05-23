@@ -154,7 +154,32 @@
   "address":      "Адрес",
   "bookingsCnt": "Заявок",
   "notifyLang": "Мова сповіщень",
-  "contract": "Договір"
+  "contract": "Договір",
+
+  "title": "CROCUS CRM",
+  "back": "Назад",
+  "loadingBooking": "Завантаження броні…",
+  "bookingInfo": "Інформація про бронювання",
+  "labelBookingNo": "Бронювання №",
+  "labelOperator": "Оператор",
+  "labelRegion": "Напрямок",
+  "labelDeparture": "Місто вильоту",
+  "labelArrival": "Місто прильоту",
+  "labelHotel": "Готель",
+  "labelPeriod": "Період",
+  "labelRoom": "Номер",
+  "labelBrutto": "Brutto",
+  "labelMeal": "Харчування",
+  "labelStatus": "Статус",
+  "labelName": "ПІБ",
+  "labelAge": "Вік",
+  "labelDOB": "Дата народження",
+  "labelNationality": "Громадянство",
+  "labelPassportNo": "Паспорт №",
+  "labelPassportValid": "Дійсний до",
+  "placeholderComment": "Ваш коментар…",
+  "send": "Відправити",
+  "sending": "Відправка…"
 
 
 

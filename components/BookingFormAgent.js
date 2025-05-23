@@ -84,7 +84,7 @@ export default function BookingFormAgent({
       bruttoClient: +bruttoClient   || 0,
       bruttoOperator: +bruttoOperator|| 0,
       nettoOperator:  +nettoOperator || 0,
-      paymentMethod, commission, comment,
+      paymentMethod, commissionPaid, commission, comment,
     });
     router.push("/agent/bookings");
   }

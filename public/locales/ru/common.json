@@ -155,7 +155,32 @@
   "cnp": "Личный номер",
   "bookingsCnt":     "Заявок",
   "notifyLang":      "Яз. увед.",
-  "contract":        "Договор"
+  "contract":        "Договор",
+
+    "title": "CROCUS CRM",
+  "back": "Назад",
+  "loadingBooking": "Загрузка брони…",
+  "bookingInfo": "Информация о заявке",
+  "labelBookingNo": "Заявка №",
+  "labelOperator": "Оператор",
+  "labelRegion": "Направление",
+  "labelDeparture": "Город вылета",
+  "labelArrival": "Город прилёта",
+  "labelHotel": "Отель",
+  "labelPeriod": "Период",
+  "labelRoom": "Комната",
+  "labelBrutto": "Brutto",
+  "labelMeal": "Питание",
+  "labelStatus": "Статус",
+  "labelName": "ФИО",
+  "labelAge": "Возраст",
+  "labelDOB": "Дата рождения",
+  "labelNationality": "Гражданство",
+  "labelPassportNo": "Паспорт №",
+  "labelPassportValid": "Действителен до",
+  "placeholderComment": "Ваш комментарий…",
+  "send": "Отправить",
+  "sending": "Отправка…"
   
 
 }
