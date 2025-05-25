@@ -10,7 +10,7 @@ const AuthContext = createContext();
 export function AuthProvider({ children }) {
   const router = useRouter();
   const [user, setUser] = useState(null);        // Firebase Auth user
-  const [userData, setUserData] = useState(null); // Additional Firestore profile (role, name, agency)
+  const [userData, setUserData] = useState(null); // Additional Firestore profile (role, name, agency, segment)
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -57,9 +57,10 @@ export function AuthProvider({ children }) {
   // Role helpers
   const isManager = userData?.role === "manager";
   const isAgent = userData?.role === "agent";
+  const isOlimpya  = userData?.role === "olimpya" || userData?.segment === "olimpya";
 
   return (
-    <AuthContext.Provider value={{ user, userData, loading, isManager, isAgent, login, logout }}>
+    <AuthContext.Provider value={{ user, userData, loading, isManager, isAgent, isOlimpya, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

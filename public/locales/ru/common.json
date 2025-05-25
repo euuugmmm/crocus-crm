@@ -180,7 +180,14 @@
   "labelPassportValid": "Действителен до",
   "placeholderComment": "Ваш комментарий…",
   "send": "Отправить",
-  "sending": "Отправка…"
+  "sending": "Отправка…",
+
+  "olimpyaProfitBeforeTax": "Доход Olimpya (до налога)",
+  "olimpyaNetPayout": "К выплате (после налога)",
+  "payoutType": "Тип выплаты",
+  "payoutIndividual": "Физ. лицо (-10 %)",
+  "payoutCompany": "Компания (-24 %)"
+
   
 
 }
