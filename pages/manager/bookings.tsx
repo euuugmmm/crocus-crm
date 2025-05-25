@@ -106,18 +106,21 @@ export default function ManagerBookings() {
     return () => unsubscribe();
   }, [user, isManager, router]);
 
-  // Apply filters
-  const filtered = bookings.filter((b) => {
-    const matchesOperator = b.operator
-      .toLowerCase()
-      .includes(filters.operator.toLowerCase());
-    const matchesHotel = b.hotel
-      .toLowerCase()
-      .includes(filters.hotel.toLowerCase());
-    const matchesStatus =
-      filters.status === "all" || b.status === filters.status;
-    return matchesOperator && matchesHotel && matchesStatus;
-  });
+// Apply filters ─ безопасно обрабатываем undefined
+const filtered = bookings.filter((b) => {
+  const matchesOperator = (b.operator || "")
+    .toLowerCase()
+    .includes((filters.operator || "").toLowerCase());
+
+  const matchesHotel = (b.hotel || "")
+    .toLowerCase()
+    .includes((filters.hotel || "").toLowerCase());
+
+  const matchesStatus =
+    filters.status === "all" || b.status === filters.status;
+
+  return matchesOperator && matchesHotel && matchesStatus;
+});
 
   // Totals
   const totalBrutto = filtered.reduce(
@@ -148,6 +151,7 @@ export default function ManagerBookings() {
     { href: "/manager/bookings", label: t("navBookings") },
     { href: "/manager/balances", label: t("navBalance") },
     { href: "/manager/payouts", label: t("navPayouts") },
+    { href: "/manager/users", label: t("navUsers") },
   ];
   const isActive = (h: string) => router.pathname.startsWith(h);
 

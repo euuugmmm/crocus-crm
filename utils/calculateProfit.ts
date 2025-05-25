@@ -1,47 +1,62 @@
 // utils/calculateProfit.ts
 
-import { Booking } from "@/types/BookingDTO";
+export type Ownership = {
+  crocusProfit: number;
+  evgeniyShare: number;
+  igorShare: number;
+};
 
-export function calculateProfit(booking: Booking): number {
+export function calculateProfit(
+  booking: {
+    crocusProfit?: number;
+    market?: string;
+    agentId?: string;
+    bruttoClient?: number;
+    nettoOperator?: number;
+    internalNet?: number;
+    bookingType?: string;
+  }
+): Ownership {
   const {
-    salePrice = 0,
-    supplierCost = 0,
-    agentCommission = 0,
-    bankFees = 0,
+    crocusProfit = 0,
+    market = "",
+    agentId = "",
+    bruttoClient = 0,
+    nettoOperator = 0,
+    internalNet = 0,
   } = booking;
 
-  return salePrice - supplierCost - agentCommission - bankFees;
-}
+  const bookingType = booking.bookingType || (() => {
+    if (market === "Украина" && agentId) return "subagent";
+    if (market === "Румыния") return "romania";
+    if (market === "База Игоря") return "igorBase";
+    return "default";
+  })();
 
-export function getFounderShares(booking: Booking): {
-  igorShare: number;
-  evgeniyShare: number;
-} {
-  const netProfit = calculateProfit(booking);
-
-  let igorRatio = 0;
-  let evgeniyRatio = 0;
-
-  switch (booking.market) {
-    case "Romania":
-      igorRatio = 0.5;
-      evgeniyRatio = 0.5;
-      break;
-    case "Ukraine":
-      igorRatio = 0.7;
-      evgeniyRatio = 0.3;
-      break;
-    case "IgorBase":
-      igorRatio = 1.0;
-      evgeniyRatio = 0.0;
-      break;
-    default:
-      igorRatio = 0.5;
-      evgeniyRatio = 0.5;
+  // Случай 1 — украинские субагенты → делим прибыль 50/50
+  if (bookingType === "subagent") {
+    const share = crocusProfit / 2;
+    return { crocusProfit, evgeniyShare: share, igorShare: share };
   }
 
-  return {
-    igorShare: +(netProfit * igorRatio).toFixed(2),
-    evgeniyShare: +(netProfit * evgeniyRatio).toFixed(2),
-  };
+  // Случай 2 — румынские заявки → тоже 50/50
+  if (bookingType === "romania") {
+    const share = crocusProfit / 2;
+    return { crocusProfit, evgeniyShare: share, igorShare: share };
+  }
+
+  // Случай 3 — база Игоря → 100% комиссии Игорю, но с перераспределением дельты
+  if (bookingType === "igorBase") {
+    const nominalCommission = bruttoClient - internalNet;
+    const delta = internalNet - nettoOperator;
+
+    const evgeniyShare = delta > 0 ? delta * 0.3 : 0;
+    const igorShare = nominalCommission - evgeniyShare;
+    const total = evgeniyShare + igorShare;
+
+    return { crocusProfit: total, evgeniyShare, igorShare };
+  }
+
+  // По умолчанию — всё Евгению
+  return { crocusProfit, evgeniyShare: crocusProfit, igorShare: 0 };
 }

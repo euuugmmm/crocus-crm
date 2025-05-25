@@ -116,20 +116,20 @@ export default function AgentBookingsPage() {
             ))}
           </nav>
           <div className="flex items-center gap-4">
-          <Link href="/agent/profile" locale={router.locale}>
-            <Button
-              size="sm"
-              className="
-                bg-yellow-500 text-white
-                px-4 py-2 rounded-lg shadow
-                hover:bg-yellow-600
-                transition-colors
-                focus:outline-none focus:ring-2 focus:ring-orange-300
-              "
-            >
-              {t("profile")}
-            </Button>
-          </Link>
+            <Link href="/agent/profile" locale={router.locale}>
+              <Button
+                size="sm"
+                className="
+                  bg-yellow-500 text-white
+                  px-4 py-2 rounded-lg shadow
+                  hover:bg-yellow-600
+                  transition-colors
+                  focus:outline-none focus:ring-2 focus:ring-orange-300
+                "
+              >
+                {t("profile")}
+              </Button>
+            </Link>
             <Button size="sm" variant="destructive" onClick={logout}>
               {t("logout")}
             </Button>
@@ -141,9 +141,7 @@ export default function AgentBookingsPage() {
         <CardContent className="p-6">
           <div className="flex justify-between items-center mb-4">
             <h1 className="text-2xl font-bold">{t("myBookings")}</h1>
-            <Button className="bg-green-600 hover:bg-green-700" onClick={() => router.push("/agent/new-booking")}>
-              + {t("newBooking")}
-            </Button>
+            <Button className="bg-green-600 hover:bg-green-700" onClick={() => router.push("/agent/new-booking")}>+ {t("newBooking")}</Button>
           </div>
 
           <div className="overflow-x-auto">
@@ -190,7 +188,6 @@ export default function AgentBookingsPage() {
                       </SelectContent>
                     </Select>
                   </td>
-                  <td></td><td></td><td></td>
                 </tr>
               </thead>
               <tbody>
@@ -213,7 +210,7 @@ export default function AgentBookingsPage() {
                       </td>
                       <td className="px-2 py-1">
                         {b.invoiceLink ? (
-                          <a href={b.invoiceLink} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Открыть</a>
+                          <a href={b.invoiceLink} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Open</a>
                         ) : "—"}
                       </td>
                       <td className="px-2 py-1 min-w-[110px]">
@@ -221,13 +218,22 @@ export default function AgentBookingsPage() {
                           ? b.voucherLinks.map((l, i) => (
                               <div key={i}>
                                 <a href={l} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">
-                                  Ваучер {i + 1}
+                                  Voucher {i + 1}
                                 </a>
                               </div>
                             ))
                           : "—"}
                       </td>
-                      <td className="px-2 py-1">{b.comment || "—"}</td>
+                      
+                      <td className="px-2 py-1">
+                          <button
+                            title={t("edit")}
+                            className="text-xl hover:scale-110 transition"
+                            onClick={() => router.push(`/agent/${b.id}`)}
+                          >
+                            ✏️
+                          </button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -237,7 +243,7 @@ export default function AgentBookingsPage() {
                   <td colSpan={6} className="px-2 py-2 text-right">{t("total")}:</td>
                   <td className="px-2 py-2 text-center">{totalBr.toFixed(2)} €</td>
                   <td className="px-2 py-2 text-center">{totalCm.toFixed(2)} €</td>
-                  <td colSpan={4}></td>
+                  <td colSpan={5}></td>
                 </tr>
               </tfoot>
             </table>

@@ -37,6 +37,17 @@ For more details, please contact us.`,
     ua: (d: any) => `✏️ <b>Заявка №${d.bookingNumber}</b> змінила статус з <b>${d.oldStatus}</b> на <b>${d.newStatus}</b>.
 Для додаткової інформації зв'яжіться з нами.`,
   },
+  newComment: {
+    ru: (d: any) => `💬 <b>Новый комментарий</b> к заявке №<b>${d.bookingNumber}</b>:
+${d.comment}
+Вы можете ответить в CRM.`,
+    en: (d: any) => `💬 <b>New comment</b> on booking №<b>${d.bookingNumber}</b>:
+${d.comment}
+You can reply in the CRM.`,
+    ua: (d: any) => `💬 <b>Новий коментар</b> до заявки №<b>${d.bookingNumber}</b>:
+${d.comment}
+Ви можете відповісти в CRM.`,
+  },
 };
 
 const managerTemplates = {
@@ -45,32 +56,20 @@ const managerTemplates = {
 ${d.hotel} / ${d.operator}
 От агента: ${d.agentName} (${d.agentAgency})
 Подробнее в CRM.`,
-    en: (d: any) => `🆕 <b>New booking №${d.bookingNumber}</b>
-${d.hotel} / ${d.operator}
-From agent: ${d.agentName} (${d.agentAgency})
-See CRM for details.`,
-    ua: (d: any) => `🆕 <b>Нове замовлення №${d.bookingNumber}</b>
-${d.hotel} / ${d.operator}
-Від агента: ${d.agentName} (${d.agentAgency})
-Деталі в CRM.`,
   },
   newUser: {
     ru: (d: any) => `👤 <b>Новая регистрация агента</b>
 Агентство: <b>${d.agencyName}</b>
 Имя: <b>${d.name}</b>
 Email: ${d.email}`,
-    en: (d: any) => `👤 <b>New agent registration</b>
-Agency: <b>${d.agencyName}</b>
-Name: <b>${d.name}</b>
-Email: ${d.email}`,
-    ua: (d: any) => `👤 <b>Нова реєстрація агента</b>
-Агенція: <b>${d.agencyName}</b>
-Ім'я: <b>${d.name}</b>
-Email: ${d.email}`,
+  },
+  newComment: {
+    ru: (d: any) => `💬 <b>Новый комментарий</b> к заявке №<b>${d.bookingNumber}</b> от агента:
+${d.comment}
+Смотрите подробности в CRM.`,
   },
 };
 
-// Мэппинг кодов статусов в человекочитаемые строки
 const STATUS_LABELS: Record<string, Record<string, string>> = {
   ru: {
     new: "Новая",
@@ -129,11 +128,11 @@ export default async function handler(
     data: any;
   };
 
-  // Сохраним оригинальные коды статусов для перевода
+  // Сохраним оригинальные коды статусов (для statusChanged)
   const origOld = origData.oldStatus;
   const origNew = origData.newStatus;
 
-  // 1) агенту
+  // 1) уведомление агенту
   if (agentId) {
     const snap = await adminDB.doc(`users/${agentId}`).get();
     const user = snap.data() as any;
@@ -149,7 +148,7 @@ export default async function handler(
     }
   }
 
-  // 2) менеджерам
+  // 2) уведомление менеджерам (только на русском)
   if (managers) {
     const snap = await adminDB
       .collection("users")
@@ -160,13 +159,8 @@ export default async function handler(
     await Promise.all(
       snap.docs.map(async (d) => {
         const u = d.data() as any;
-        const lang = u.notifyLang || "ru";
         const data = { ...origData };
-        if (type === "statusChanged") {
-          data.oldStatus = STATUS_LABELS[lang][origOld] || origOld;
-          data.newStatus = STATUS_LABELS[lang][origNew] || origNew;
-        }
-        const text = makeText(managerTemplates, type, data, lang);
+        const text = makeText(managerTemplates, type, data, "ru");
         await send(u.tgChatId, text);
       })
     );

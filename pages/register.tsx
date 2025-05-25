@@ -1,6 +1,10 @@
+// pages/register.tsx
 import { useState } from "react";
 import { useRouter } from "next/router";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  updateProfile,
+} from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useTranslation } from "next-i18next";
@@ -8,12 +12,9 @@ import { serverSideTranslations } from "next-i18next/serverSideTranslations";
 import Head from "next/head";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 
+/* ───── i18n ───── */
 export async function getServerSideProps({ locale }: { locale: string }) {
-  return {
-    props: {
-      ...(await serverSideTranslations(locale, ["common"]))
-    }
-  };
+  return { props: { ...(await serverSideTranslations(locale, ["common"])) } };
 }
 
 export default function Register() {
@@ -21,41 +22,52 @@ export default function Register() {
   const router = useRouter();
 
   const [agencyName, setAgencyName] = useState("");
-  const [agentName, setAgentName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [agentName,  setAgentName]  = useState("");
+  const [email,      setEmail]      = useState("");
+  const [password,   setPassword]   = useState("");
+  const [error,      setError]      = useState("");
 
+  /* ───── регистрация ───── */
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+      /* ➊ создаём пользователя в Firebase-Auth */
+      const { user } = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password
+      );
 
+      /* ➋ берём порядковый номер агента у бекенда */
+      const seqRes = await fetch("/api/next-agent-no", { method: "POST" });
+      const { agentNo } = await seqRes.json();
+      if (!agentNo) throw new Error("Counter error");
+
+      /* ➌ сохраняем профиль пользователя */
       await setDoc(doc(db, "users", user.uid), {
         agencyName,
         agentName,
         email,
-        role: "agent",
-        createdAt: new Date(),
+        role       : "agent",
+        agentNo,           // ← полученный номер
+        contractSeq: 0,
+        createdAt  : new Date(),
       });
 
-      await fetch("/api/telegram/notify", {
-        method: "POST",
+      /* ➍ уведомляем менеджеров (телеграм-бот) */
+      fetch("/api/telegram/notify", {
+        method : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body   : JSON.stringify({
           managers: true,
-          type: "newUser",
-          data: {
-            email,
-            name: agentName,
-            agentId: user.uid,
-            agencyName,
-          },
+          type   : "newUser",
+          data   : { email, name: agentName, agentId: user.uid, agencyName },
         }),
-      }).catch(err => console.error("[tg notify → менеджеры]", err));
+      }).catch((err) => console.error("[tg notify]", err));
 
+      /* ➎ обновляем displayName и переходим */
       await updateProfile(user, { displayName: agentName });
       router.push("/agent/bookings");
     } catch (err: any) {
@@ -63,17 +75,24 @@ export default function Register() {
     }
   };
 
+  /* ───── UI ───── */
   return (
     <>
       <Head>
         <title>{`Crocus CRM – ${t("register")}`}</title>
       </Head>
+
       <LanguageSwitcher />
+
       <div className="p-6 max-w-md mx-auto">
         <h1 className="text-2xl font-semibold mb-4 text-center">
           {t("registerAgent")}
         </h1>
-        {error && <p className="text-red-500 mb-4 text-center">{error}</p>}
+
+        {error && (
+          <p className="text-red-500 mb-4 text-center">{error}</p>
+        )}
+
         <form onSubmit={handleRegister} className="space-y-4">
           <input
             type="text"
@@ -107,6 +126,7 @@ export default function Register() {
             required
             className="w-full border p-2 rounded"
           />
+
           <button
             type="submit"
             className="w-full bg-blue-600 hover:bg-blue-700 text-white p-2 rounded"

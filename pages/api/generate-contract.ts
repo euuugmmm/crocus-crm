@@ -1,121 +1,127 @@
-// pages/api/generate-contract.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { google } from "googleapis";
-import PizZip from "pizzip";
-import Docxtemplater from "docxtemplater";
-import { readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
-import { execSync } from "child_process";
-import fs from "fs";
+import fs, { promises as fsp } from "fs";
+import createReport from "docx-templates";
 import { initializeApp, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
-export const config = { api: { bodyParser: true } };
-
-// Инициализируем Admin SDK (для записи ссылки в Firestore)
-if (!globalThis._firebaseAdmin) {
-  initializeApp({
-    credential: cert(JSON.parse(process.env.FIREBASE_ADMIN_SDK_KEY!)),
-  });
-  globalThis._firebaseAdmin = true;
+/* ───── helpers ───── */
+function getCred(plain: string, b64: string) {
+  if (process.env[plain]) return JSON.parse(process.env[plain]!);
+  if (process.env[b64])   return JSON.parse(Buffer.from(process.env[b64]!, "base64").toString("utf8"));
+  throw new Error(`env ${plain} / ${b64} not set`);
 }
-const firestore = getFirestore();
+const safeName = (s: string) => s.replace(/[\\/:*?"<>|]/g, "_").trim();
 
-// ID корневой папки в Google Drive, где будут лежать все контракты
-const ROOT_FOLDER_ID = process.env.CONTRACTS_ROOT_FOLDER_ID!;
-// Сервисный аккаунт Google
-const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON!),
-  scopes: ["https://www.googleapis.com/auth/drive"],
+/* ───── Firebase ───── */
+if (!(global as any)._fbAdmin) {
+  initializeApp({ credential: cert(getCred("FIREBASE_SERVICE_ACCOUNT_JSON", "FIREBASE_SERVICE_ACCOUNT_JSON_BASE64")) });
+  (global as any)._fbAdmin = true;
+}
+const db = getFirestore();
+
+/* ───── Drive ───── */
+const drive = google.drive({
+  version: "v3",
+  auth: new google.auth.GoogleAuth({
+    credentials: getCred("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON_BASE64"),
+    scopes: ["https://www.googleapis.com/auth/drive"],
+  }),
 });
-const drive = google.drive({ version: "v3", auth });
+const ROOT_FOLDER_ID = process.env.CONTRACTS_ROOT_FOLDER_ID!;
 
+/* ───── получить № агента + следующий seq ───── */
+async function getNumbers(uid: string) {
+  const ref = db.doc(`users/${uid}`);
+  return db.runTransaction(async tr => {
+    const snap = await tr.get(ref);
+    const d = snap.data() || {};
+    const agentNo = d.agentNo;        // ← пишется при регистрации
+    const seq     = (d.contractSeq ?? 0) + 1;
+    tr.set(ref,{ contractSeq: FieldValue.increment(1) },{ merge:true });
+    return { agentNo, seq };
+  });
+}
+
+/* ───── handler ───── */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).end("Method Not Allowed");
+  if (req.method !== "POST") return res.status(405).end();
 
   try {
-    const { bookingId, agencyName, agentName, agentEmail, date } = req.body as {
-      bookingId: string;
-      agencyName: string;
-      agentName: string;
-      agentEmail: string;
-      date: string;
-    };
+    const { userId, name, address, agency, cnp, passport } = req.body as any;
+    if (![userId,name,address,agency,cnp,passport].every(Boolean))
+      return res.status(400).json({ error:"Missing fields" });
 
-    // 1) Загрузим Word-шаблон
-    const tplPath = resolve(process.cwd(), "templates/contract-template.docx");
-    const content = readFileSync(tplPath, "binary");
-    const zip = new PizZip(content);
-    const doc = new Docxtemplater(zip, { paragraphLoop: true });
-    doc.setData({ agencyName, agentName, agentEmail, date });
-    doc.render();
+    /* ➊ номера */
+    const { agentNo, seq } = await getNumbers(userId);
+    if (!agentNo) throw new Error("agentNo missing in user profile");
+    const contractNumber = `${agentNo}-${String(seq).padStart(3,"0")}`;
+    const date = new Date().toLocaleDateString("ru-RU");
 
-    // 2) Сохраним заполненный .docx во временный файл
-    const buffer = doc.getZip().generate({ type: "nodebuffer" });
-    const tmpDocx = join(tmpdir(), `contract-${bookingId}.docx`);
-    await fs.promises.writeFile(tmpDocx, buffer);
-
-    // 3) Конвертируем docx → html через LibreOffice
-    execSync(`libreoffice --headless --convert-to html --outdir ${tmpdir()} ${tmpDocx}`);
-    const tmpHtml = tmpDocx.replace(/\.docx$/, ".html");
-
-    // 4) html → pdf через puppeteer
-    const puppeteer = await import("puppeteer");
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
-    await page.goto("file://" + tmpHtml, { waitUntil: "networkidle0" });
-    const tmpPdf = tmpDocx.replace(/\.docx$/, ".pdf");
-    await page.pdf({ path: tmpPdf, format: "A4" });
-    await browser.close();
-
-    // 5) Найдём (или создадим) папку с именем agencyName внутри ROOT_FOLDER_ID
-    const list = await drive.files.list({
-      q: `'${ROOT_FOLDER_ID}' in parents and name='${agencyName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      fields: "files(id,name)",
+    /* ➋ генерируем DOCX */
+    const tpl = resolve(process.cwd(),"templates/agent-contract.docx");
+    const buf = await createReport({
+      template        : await fsp.readFile(tpl),
+      data            : { name, address, agency, cnp, passport, contractNumber, date },
+      cmdDelimiter    : ["{{","}}"],
+      processLineBreaks: true,
     });
-    let folderId: string;
-    if (list.data.files && list.data.files.length) {
-      folderId = list.data.files[0].id!;
-    } else {
-      const mk = await drive.files.create({
-        requestBody: {
-          name: agencyName,
-          mimeType: "application/vnd.google-apps.folder",
-          parents: [ROOT_FOLDER_ID],
-        },
-        fields: "id",
-      });
-      folderId = mk.data.id!;
+    const tmpDoc = join(tmpdir(),`contract-${userId}-${seq}.docx`);
+    await fsp.writeFile(tmpDoc, buf);
+
+    /* ➌ папка = название агентства */
+    const folderName = safeName(agency);
+    const { data:list } = await drive.files.list({
+      q:`'${ROOT_FOLDER_ID}' in parents and name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields:"files(id)",
+    });
+    let folderId = list.files?.[0]?.id;
+    if (!folderId) {
+      folderId = (await drive.files.create({
+        requestBody:{ name:folderName, mimeType:"application/vnd.google-apps.folder", parents:[ROOT_FOLDER_ID] },
+        fields:"id",
+      })).data.id!;
     }
 
-    // 6) Загружаем PDF в Drive
-    const fileName = `${bookingId}-contract.pdf`;
-    const upload = await drive.files.create({
-      requestBody: {
-        name: fileName,
-        parents: [folderId],
+    /* ➍ загружаем DOCX ➜ Google Docs */
+    const gdocId = (await drive.files.create({
+      requestBody:{ name:contractNumber, mimeType:"application/vnd.google-apps.document", parents:[folderId] },
+      media:{ mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document", body: fs.createReadStream(tmpDoc) },
+      fields:"id",
+    })).data.id!;
+
+    /* ➎ экспорт в PDF */
+    const pdfBuf = Buffer.from((await drive.files.export(
+      { fileId:gdocId, mimeType:"application/pdf" },
+      { responseType:"arraybuffer" }
+    )).data as ArrayBuffer);
+    const tmpPdf = tmpDoc.replace(/\.docx$/,".pdf");
+    await fsp.writeFile(tmpPdf, pdfBuf);
+
+    /* ➏ загружаем PDF, даём публичный доступ */
+    const pdfId = (await drive.files.create({
+      requestBody:{ name:`${contractNumber}.pdf`, parents:[folderId] },
+      media:{ mimeType:"application/pdf", body: fs.createReadStream(tmpPdf) },
+      fields:"id",
+    })).data.id!;
+    await drive.permissions.create({ fileId:pdfId, requestBody:{ role:"reader", type:"anyone" }});
+    const link = `https://drive.google.com/uc?id=${pdfId}&export=download`;
+
+    /* ➐ Firestore: последние + история */
+    await db.doc(`users/${userId}`).set({
+      lastContract:{
+        number     : contractNumber,
+        link       : link,
       },
-      media: { mimeType: "application/pdf", body: fs.createReadStream(tmpPdf) },
-      fields: "id",
-    });
-    const fileId = upload.data.id!;
+      contractLinks: FieldValue.arrayUnion(link),
+      hasSignedContract: false,
+    },{ merge:true });
 
-    // 7) Делаем его доступным по ссылке
-    await drive.permissions.create({
-      fileId,
-      requestBody: { role: "reader", type: "anyone" },
-    });
-    const link = `https://drive.google.com/uc?id=${fileId}&export=download`;
-
-    // 8) Сохраняем ссылку в Firestore в документе брони
-    await firestore.collection("bookings").doc(bookingId).update({
-      contractLinks: google.firestore.FieldValue.arrayUnion(link),
-    });
-
-    return res.status(200).json({ link });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: "Contract generation failed", details: String(e) });
+    res.status(200).json({ link, contractNumber, date });
+  } catch (e:any) {
+    console.error("Contract gen error:",e);
+    res.status(500).json({ error:"Generation failed", details:e.message });
   }
 }
