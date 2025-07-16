@@ -48,7 +48,10 @@ export default function BookingEditPage() {
     }
   };
 
-  if (loading) return <div className="p-6">Загрузка...</div>;
+  if (loading) {
+  return <div className="p-6">Загрузка...</div>;
+}
+}
   if (error || !booking) return <div className="p-6 text-red-500">Ошибка: {error || "заявка не найдена"}</div>;
 
   const profit = calculateProfit(booking);
