@@ -1,12 +1,13 @@
 // utils/matchTransactionToBooking.ts
 
-import { BookingDTO } from "@/types/BookingDTO";
+import { Booking } from "@/types/BookingDTO";
+
 import { BankTransaction } from "@/types/BankTransaction";
 
 // Функция для автоматического сопоставления транзакции с заявкой
 export function matchTransactionToBooking(
   txn: BankTransaction,
-  bookings: BookingDTO[]
+  bookings: Booking[]
 ): string | null {
   // Попробовать найти по bookingNumber в назначении платежа
   const possibleNumbers = bookings.map(b => b.bookingNumber).filter(Boolean);
