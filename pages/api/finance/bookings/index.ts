@@ -3,7 +3,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { adminDB } from "@/lib/firebaseAdmin";
 import { Timestamp } from "firebase-admin/firestore";
-import { calculateNetProfit } from "@/utils/calculateProfit";
+import { calculateProfit } from "@/utils/calculateProfit";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === "POST") {
@@ -18,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       bookings.forEach((bk: any) => {
         const ref = adminDB.collection("bookings").doc(bk.bookingNumber || undefined);
 
-        const netProfit = calculateNetProfit(bk);
+        const netProfit = calculateProfit(bk);
         const updated = {
           ...bk,
           netProfit,
