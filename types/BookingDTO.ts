@@ -30,4 +30,6 @@ export interface Booking {
   internalNet?: number;
   commission?: number;
   bankFeeAmount?: number;
+  invoiceIban?: string;
+  checkIn?: string | Date;
 }
