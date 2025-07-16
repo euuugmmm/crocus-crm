@@ -1,10 +1,10 @@
 // hooks/useBookings.ts
 
 import { useEffect, useState } from "react";
-import { BookingDTO } from "@/types/BookingDTO";
+import { Booking } from "@/types/BookingDTO";
 
 export function useBookings(params?: { from?: string; to?: string; market?: string }) {
-  const [data, setData] = useState<BookingDTO[]>([]);
+  const [data, setData] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
