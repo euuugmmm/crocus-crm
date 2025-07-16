@@ -26,7 +26,7 @@ export default function TransactionsPage() {
 
       {/* Таблица */}
       {!loading && transactions.length > 0 && (
-        <TransactionsTable transactions={transactions} />
+      <TransactionsTable />
       )}
     </div>
   );
