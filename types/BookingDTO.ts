@@ -25,4 +25,5 @@ export interface Booking {
     evgeniy: number;
   };
   transactionsIds?: string[];
+  bruttoClient?: number;
 }
