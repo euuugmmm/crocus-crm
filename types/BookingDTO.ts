@@ -27,5 +27,7 @@ export interface Booking {
   transactionsIds?: string[];
   bruttoClient?: number;
   nettoOperator?: number;
-  
+  internalNet?: number;
+  commission?: number;
+  bankFeeAmount?: number;
 }

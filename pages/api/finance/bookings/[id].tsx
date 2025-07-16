@@ -1,12 +1,9 @@
-// pages/finance/bookings/[id].tsx
-
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { Booking } from "@/types/BookingDTO";
 import { calculateProfit } from "@/utils/calculateProfit";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import BookingProfitBreakdown from "@/components/finance/Booking/BookingProfitBreakdown";
 
 export default function BookingEditPage() {
   const router = useRouter();
@@ -48,8 +45,13 @@ export default function BookingEditPage() {
     }
   };
 
-}
-  if (error || !booking) return <div className="p-6 text-red-500">Ошибка: {error || "заявка не найдена"}</div>;
+  if (loading) {
+    return <div className="p-6">Загрузка...</div>;
+  }
+
+  if (error || !booking) {
+    return <div className="p-6 text-red-500">Ошибка: {error || "Заявка не найдена"}</div>;
+  }
 
   const profit = calculateProfit(booking);
 
@@ -58,13 +60,40 @@ export default function BookingEditPage() {
       <h1 className="text-2xl font-bold">Редактирование заявки {booking.bookingNumber}</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Input label="Клиент" value={booking.clientName || ""} onChange={(e) => handleChange("clientName", e.target.value)} />
-        <Input label="Категория" value={booking.category || ""} onChange={(e) => handleChange("category", e.target.value)} />
-        <Input label="Брутто клиента" type="number" value={booking.bruttoClient || 0} onChange={(e) => handleChange("bruttoClient", parseFloat(e.target.value))} />
-        <Input label="Нетто оператора" type="number" value={booking.nettoOperator || 0} onChange={(e) => handleChange("nettoOperator", parseFloat(e.target.value))} />
-        <Input label="Internal Net (для Игоря)" type="number" value={booking.internalNet || 0} onChange={(e) => handleChange("internalNet", parseFloat(e.target.value))} />
-        <Input label="Комиссия агента" type="number" value={booking.commission || 0} onChange={(e) => handleChange("commission", parseFloat(e.target.value))} />
-        <Input label="Банковская комиссия" type="number" value={booking.bankFeeAmount || 0} onChange={(e) => handleChange("bankFeeAmount", parseFloat(e.target.value))} />
+        <div>
+          <label className="block text-sm font-medium mb-1">Клиент</label>
+          <Input value={booking.clientName || ""} onChange={(e) => handleChange("clientName", e.target.value)} />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Категория</label>
+          <Input value={booking.category || ""} onChange={(e) => handleChange("category", e.target.value)} />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Брутто клиента</label>
+          <Input type="number" value={booking.bruttoClient || 0} onChange={(e) => handleChange("bruttoClient", parseFloat(e.target.value))} />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Нетто оператора</label>
+          <Input type="number" value={booking.nettoOperator || 0} onChange={(e) => handleChange("nettoOperator", parseFloat(e.target.value))} />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Internal Net (для Игоря)</label>
+          <Input type="number" value={booking.internalNet || 0} onChange={(e) => handleChange("internalNet", parseFloat(e.target.value))} />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Комиссия агента</label>
+          <Input type="number" value={booking.commission || 0} onChange={(e) => handleChange("commission", parseFloat(e.target.value))} />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Банковская комиссия</label>
+          <Input type="number" value={booking.bankFeeAmount || 0} onChange={(e) => handleChange("bankFeeAmount", parseFloat(e.target.value))} />
+        </div>
       </div>
 
       <div className="bg-gray-100 p-4 rounded-lg">
