@@ -42,9 +42,6 @@ export interface BookingDTO {
   invoiceLink?: string;
   status?: string;
   attachments?: File[];
-
-  attachments?: File[];
-
   agentName?: string;
   agentAgency?: string;
   email?: string;
