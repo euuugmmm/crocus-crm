@@ -19,7 +19,7 @@ export default function BookingsPage() {
         <p className="text-gray-500">Заявки не найдены.</p>
       )}
 
-      <BookingsTable bookings={bookings} />
+      <BookingsTable />
     </div>
   );
 }
