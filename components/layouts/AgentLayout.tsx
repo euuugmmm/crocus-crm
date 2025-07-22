@@ -14,8 +14,8 @@ export default function AgentLayout({ children }: { children: React.ReactNode })
 
   const nav = [
     { href: "/agent/bookings", label: t("navBookings") },
-    { href: "/agent/balance", label: t("navBalance") },
-    { href: "/agent/history", label: t("navHistory") },
+    { href: "/agent/balance",  label: t("navBalance") },
+    { href: "/agent/history",  label: t("navHistory") },
   ];
 
   const [showLangs, setShowLangs] = useState(false);
@@ -25,27 +25,25 @@ export default function AgentLayout({ children }: { children: React.ReactNode })
 
   const isActive = (h: string) => router.pathname.startsWith(h);
 
-  const changeLanguage = (lng: string) => {
-    i18n.changeLanguage(lng);
+  const changeLanguage = async (lng: string) => {
+    await i18n.changeLanguage(lng);
     setShowLangs(false);
+    // Перенавигация с новым locale
+    router.push(router.asPath, router.asPath, { locale: lng });
   };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
-        langRef.current &&
-        !langRef.current.contains(event.target as Node) &&
-        userRef.current &&
-        !userRef.current.contains(event.target as Node)
+        langRef.current && !langRef.current.contains(event.target as Node) &&
+        userRef.current && !userRef.current.contains(event.target as Node)
       ) {
         setShowLangs(false);
         setShowUserMenu(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   return (
@@ -71,18 +69,17 @@ export default function AgentLayout({ children }: { children: React.ReactNode })
           </nav>
 
           <div className="flex items-center gap-4">
-            {/* Language Selector */}
+            {/* Селектор языка */}
             <div className="relative" ref={langRef}>
               <button
                 onClick={() => setShowLangs(!showLangs)}
                 className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-black"
               >
-                <Globe className="w-4 h-4" />
-                {t("language")}
+                <Globe className="w-4 h-4" /> {t("language")}
               </button>
               {showLangs && (
-                <div className="absolute right-0 mt-2 bg-white border rounded shadow-md z-50 py-2 min-w-[80px] flex flex-col items-stretch gap-1">
-                  {["ua", "en", "ru"].map((lng) => (
+                <div className="absolute right-0 mt-2 bg-white border rounded shadow-md z-50 py-2 min-w-[80px] flex flex-col gap-1">
+                  {["en", "ru", "ua"].map((lng) => (
                     <button
                       key={lng}
                       onClick={() => changeLanguage(lng)}
@@ -99,7 +96,7 @@ export default function AgentLayout({ children }: { children: React.ReactNode })
               )}
             </div>
 
-            {/* User Menu */}
+            {/* Меню пользователя */}
             <div className="relative" ref={userRef}>
               <button
                 onClick={() => setShowUserMenu(!showUserMenu)}

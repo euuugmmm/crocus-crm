@@ -1,3 +1,4 @@
+// components/ManagerLayout.tsx
 "use client";
 
 import Link from "next/link";
@@ -14,11 +15,11 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
   const { logout, userData } = useAuth();
 
   const nav = [
-    { href: "/manager/bookings", label: t("navBookings") },
-    { href: "/manager/balances", label: t("navBalances") },
-    { href: "/manager/payouts", label: t("navPayouts") },
-    { href: "/manager/users", label: t("navUsers") },
-    { href: "/finance", label: t("navFinance") },
+    { href: "/manager/bookings",   label: t("navBookings") },
+    { href: "/manager/balances",   label: t("navBalances") },
+    { href: "/manager/payouts",    label: t("navPayouts") },
+    { href: "/manager/users",      label: t("navUsers") },
+    { href: "/finance",            label: t("navFinance") },
   ];
 
   const [showLangs, setShowLangs] = useState(false);
@@ -28,27 +29,25 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
 
   const isActive = (h: string) => router.pathname.startsWith(h);
 
-  const changeLanguage = (lng: string) => {
-    i18n.changeLanguage(lng);
+  const changeLanguage = async (lng: string) => {
+    await i18n.changeLanguage(lng);
     setShowLangs(false);
+    // Перенавигация на ту же страницу с новым locale
+    router.push(router.asPath, router.asPath, { locale: lng });
   };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
-        langRef.current &&
-        !langRef.current.contains(event.target as Node) &&
-        userRef.current &&
-        !userRef.current.contains(event.target as Node)
+        langRef.current && !langRef.current.contains(event.target as Node) &&
+        userRef.current && !userRef.current.contains(event.target as Node)
       ) {
         setShowLangs(false);
         setShowUserMenu(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   return (
@@ -84,8 +83,8 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
                 {t("language")}
               </button>
               {showLangs && (
-                <div className="absolute right-0 mt-2 bg-white border rounded shadow-md z-50 py-2 min-w-[80px] flex flex-col items-stretch gap-1">
-                  {["ua", "en", "ru"].map((lng) => (
+                <div className="absolute right-0 mt-2 bg-white border rounded shadow-md z-50 py-2 min-w-[80px] flex flex-col gap-1">
+                  {["en", "ru", "ua"].map((lng) => (
                     <button
                       key={lng}
                       onClick={() => changeLanguage(lng)}
