@@ -2,7 +2,6 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
-import Link from "next/link";
 import { useRouter } from "next/router";
 import {
   collection,
@@ -27,8 +26,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { DownloadTableExcel } from "react-export-table-to-excel";
 import type { Booking } from "@/lib/types";
-import LinkTelegramButton from "@/components/LinkTelegramButton";
-import LanguageSwitcher from "@/components/LanguageSwitcher";
+import ManagerLayout from "@/components/layouts/ManagerLayout";
 import { useTranslation } from "next-i18next";
 import { serverSideTranslations } from "next-i18next/serverSideTranslations";
 
@@ -63,24 +61,30 @@ const STATUS_COLORS: Record<typeof STATUS_KEYS[number], string> = {
 export default function ManagerBookings() {
   const router = useRouter();
   const { t } = useTranslation("common");
-  const { user, isManager, logout } = useAuth();
+  const { user, isManager } = useAuth();
+  const tableRef = useRef<HTMLTableElement | null>(null);
 
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [filters, setFilters] = useState({
+    dateFrom: "",
+    dateTo: "",
+    bookingNumber: "",
+    agentName: "",
     operator: "",
     hotel: "",
+    checkInFrom: "",
+    checkInTo: "",
+    checkOutFrom: "",
+    checkOutTo: "",
+    bruttoClient: "",
+    commission: "",
+    crocusProfit: "",
     status: "all",
   });
-  const tableRef = useRef<HTMLTableElement | null>(null);
-
-  // Build status options for filter dropdown
-  const statusOptions = [
-    { value: "all", label: t("statusFilter.all") },
-    ...STATUS_KEYS.map((key) => ({
-      value: key,
-      label: t(`statuses.${key}`),
-    })),
-  ];
+  const [sortConfig, setSortConfig] = useState<{
+    key: string;
+    direction: "asc" | "desc";
+  } | null>(null);
 
   useEffect(() => {
     if (!user) {
@@ -91,102 +95,166 @@ export default function ManagerBookings() {
       router.push("/agent/bookings");
       return;
     }
-
     const q = query(collection(db, "bookings"));
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const arr = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Booking),
-      }));
-      arr.sort((a, b) =>
-        (b.bookingNumber || "").localeCompare(a.bookingNumber || "")
+    const unsub = onSnapshot(q, (snap) => {
+      setBookings(
+        snap.docs.map((d) => ({ id: d.id, ...(d.data() as Booking) }))
       );
-      setBookings(arr);
     });
-    return () => unsubscribe();
+    return () => unsub();
   }, [user, isManager, router]);
 
-// Apply filters ─ безопасно обрабатываем undefined
-const filtered = bookings.filter((b) => {
-  const matchesOperator = (b.operator || "")
-    .toLowerCase()
-    .includes((filters.operator || "").toLowerCase());
+  const parseDate = (s: string) => (s ? new Date(s + "T00:00:00") : null);
 
-  const matchesHotel = (b.hotel || "")
-    .toLowerCase()
-    .includes((filters.hotel || "").toLowerCase());
+  const displayed = React.useMemo(() => {
+    let arr = bookings.filter((b) => {
+      const created = b.createdAt?.toDate();
+      if (
+        filters.dateFrom &&
+        (!created || created < parseDate(filters.dateFrom)!)
+      )
+        return false;
+      if (
+        filters.dateTo &&
+        (!created || created > parseDate(filters.dateTo)!)
+      )
+        return false;
 
-  const matchesStatus =
-    filters.status === "all" || b.status === filters.status;
+      const ci = b.checkIn ? new Date(b.checkIn) : null;
+      if (
+        filters.checkInFrom &&
+        (!ci || ci < parseDate(filters.checkInFrom)!)
+      )
+        return false;
+      if (filters.checkInTo && (!ci || ci > parseDate(filters.checkInTo)!))
+        return false;
 
-  return matchesOperator && matchesHotel && matchesStatus;
-});
+      const co = b.checkOut ? new Date(b.checkOut) : null;
+      if (
+        filters.checkOutFrom &&
+        (!co || co < parseDate(filters.checkOutFrom)!)
+      )
+        return false;
+      if (
+        filters.checkOutTo &&
+        (!co || co > parseDate(filters.checkOutTo)!)
+      )
+        return false;
 
-  // Totals
-  const totalBrutto = filtered.reduce(
-    (sum, b) => sum + (b.bruttoClient || 0),
-    0
-  );
-  const totalCommission = filtered.reduce(
-    (sum, b) => sum + (b.commission || 0),
-    0
-  );
-  const totalCrocus = filtered.reduce((sum, b) => {
-    const profit =
-      (b.bruttoClient || 0) -
-      (b.internalNet || 0) -
-      (b.commission || 0) -
-      ((b.commission || 0) / 0.9 - (b.commission || 0)) -
-      (b.bankFeeAmount || 0);
-    return sum + profit;
-  }, 0);
+      if (
+        !b.bookingNumber
+          ?.toLowerCase()
+          .includes(filters.bookingNumber.toLowerCase())
+      )
+        return false;
+      if (
+        !b.agentName
+          ?.toLowerCase()
+          .includes(filters.agentName.toLowerCase())
+      )
+        return false;
+      if (
+        !b.operator
+          ?.toLowerCase()
+          .includes(filters.operator.toLowerCase())
+      )
+        return false;
+      if (!b.hotel?.toLowerCase().includes(filters.hotel.toLowerCase()))
+        return false;
+
+      if (
+        filters.bruttoClient &&
+        (b.bruttoClient || 0).toFixed(2) !== filters.bruttoClient
+      )
+        return false;
+      if (
+        filters.commission &&
+        (b.commission || 0).toFixed(2) !== filters.commission
+      )
+        return false;
+
+      if (filters.crocusProfit) {
+        const profit =
+          (b.bruttoClient || 0) -
+          (b.internalNet || 0) -
+          (b.commission || 0) -
+          ((b.commission || 0) / 0.9 - b.commission) -
+          (b.bankFeeAmount || 0);
+        if (profit.toFixed(2) !== filters.crocusProfit) return false;
+      }
+
+      if (filters.status !== "all" && b.status !== filters.status)
+        return false;
+      return true;
+    });
+
+    if (sortConfig) {
+      arr = [...arr].sort((a, b) => {
+        const getValue = (obj: Booking) => {
+          switch (sortConfig.key) {
+            case "date":
+              return obj.createdAt?.toDate().getTime() || 0;
+            case "checkIn":
+              return obj.checkIn ? new Date(obj.checkIn).getTime() : 0;
+            case "checkOut":
+              return obj.checkOut ? new Date(obj.checkOut).getTime() : 0;
+            case "crocusProfit":
+              return (
+                (obj.bruttoClient || 0) -
+                (obj.internalNet || 0) -
+                (obj.commission || 0) -
+                ((obj.commission || 0) / 0.9 - obj.commission) -
+                (obj.bankFeeAmount || 0)
+              );
+            default:
+              const v = (obj as any)[sortConfig.key];
+              return typeof v === "number" ? v : String(v).localeCompare("");
+          }
+        };
+        const aVal = getValue(a),
+          bVal = getValue(b);
+        if (aVal < bVal) return sortConfig.direction === "asc" ? -1 : 1;
+        if (aVal > bVal) return sortConfig.direction === "asc" ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return arr;
+  }, [bookings, filters, sortConfig]);
+
+  function requestSort(key: string) {
+    let direction: "asc" | "desc" = "asc";
+    if (sortConfig?.key === key && sortConfig.direction === "asc") {
+      direction = "desc";
+    }
+    setSortConfig({ key, direction });
+  }
+
+  const statusOptions = [
+    { value: "all", label: t("statusFilter.all") },
+    ...STATUS_KEYS.map((key) => ({
+      value: key,
+      label: t(`statuses.${key}`),
+    })),
+  ];
+
+  const SortArrow = ({ colKey }: { colKey: string }) =>
+    sortConfig?.key === colKey
+      ? sortConfig.direction === "asc"
+        ? " ↑"
+        : " ↓"
+      : "";
 
   const delBooking = async (id: string, num: string) => {
     if (!confirm(`${t("confirmDelete")} ${num}?`)) return;
     await deleteDoc(doc(db, "bookings", id));
   };
 
-  const smallInp = "h-8 px-1 text-sm";
-  const nav = [
-    { href: "/manager/bookings", label: t("navBookings") },
-    { href: "/manager/balances", label: t("navBalance") },
-    { href: "/manager/payouts", label: t("navPayouts") },
-    { href: "/manager/users", label: t("navUsers") },
-  ];
-  const isActive = (h: string) => router.pathname.startsWith(h);
-
   return (
-    <>
-      {/* HEADER */}
-<LanguageSwitcher />
-      <header className="w-full bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <span className="font-bold text-lg">CROCUS CRM</span>
-          <nav className="flex gap-4">
-            {nav.map((n) => (
-              <Link
-                key={n.href}
-                href={n.href}
-                className={`px-3 py-2 text-sm font-medium border-b-2 ${
-                  isActive(n.href) ? "border-indigo-600 text-black" : "border-transparent text-gray-600 hover:text-black"
-                }`}
-              >
-                {n.label}
-              </Link>
-            ))}
-          </nav>
-          <div className="flex items-center gap-4">
-            <LinkTelegramButton />
-            <Button size="sm" variant="destructive" onClick={logout}>
-              {t("logout")}
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      {/* CONTENT */}
+    <ManagerLayout>
       <Card className="w-full mx-auto mt-6">
         <CardContent className="p-6">
+          {/* Заголовок и экспорт */}
           <div className="flex justify-between items-center mb-4">
             <h1 className="text-2xl font-bold">{t("manager.title")}</h1>
             <DownloadTableExcel
@@ -200,69 +268,213 @@ const filtered = bookings.filter((b) => {
             </DownloadTableExcel>
           </div>
 
+          {/* Таблица */}
           <div className="overflow-x-auto">
             <table
               ref={tableRef}
               className="min-w-[1400px] w-full border text-sm"
             >
               <thead className="bg-gray-100 text-center">
+                {/* Заголовки */}
                 <tr>
-                  <th className="px-2 py-1 border">{t("date")}</th>
-                  <th className="px-2 py-1 border">№</th>
-                  <th className="px-2 py-1 border">{t("agent")}</th>
-                  <th className="px-2 py-1 border">{t("operator")}</th>
-                  <th className="px-2 py-1 border">{t("hotel")}</th>
-                  <th className="px-2 py-1 border">{t("checkIn")}</th>
-                  <th className="px-2 py-1 border">{t("checkOut")}</th>
-                  <th className="px-2 py-1 border w-40">{t("client")} (€)</th>
-                  <th className="px-2 py-1 border w-40">
+                  <th
+                    className="px-2 py-1 border w-[100px] cursor-pointer"
+                    onClick={() => requestSort("date")}
+                  >
+                    {t("date")}
+                    <SortArrow colKey="date" />
+                  </th>
+                  <th className="px-2 py-1 border w-[80px]">{t("№")}</th>
+                  <th
+                    className="px-2 py-1 border w-[200px] cursor-pointer"
+                    onClick={() => requestSort("agentName")}
+                  >
+                    {t("agent")}
+                    <SortArrow colKey="agentName" />
+                  </th>
+                  <th
+                    className="px-2 py-1 border w-[150px] cursor-pointer"
+                    onClick={() => requestSort("operator")}
+                  >
+                    {t("operator")}
+                    <SortArrow colKey="operator" />
+                  </th>
+                  <th
+                    className="px-2 py-1 border w-[400px] cursor-pointer text-center"
+                    onClick={() => requestSort("hotel")}
+                  >
+                    {t("hotel")}
+                    <SortArrow colKey="hotel" />
+                  </th>
+                  <th
+                    className="px-2 py-1 border w-[120px] cursor-pointer"
+                    onClick={() => requestSort("checkIn")}
+                  >
+                    {t("checkIn")}
+                    <SortArrow colKey="checkIn" />
+                  </th>
+                  <th
+                    className="px-2 py-1 border w-[120px] cursor-pointer"
+                    onClick={() => requestSort("checkOut")}
+                  >
+                    {t("checkOut")}
+                    <SortArrow colKey="checkOut" />
+                  </th>
+                  <th
+                    className="px-2 py-1 border w-[100px] cursor-pointer"
+                    onClick={() => requestSort("bruttoClient")}
+                  >
+                    {t("client")} (€)
+                    <SortArrow colKey="bruttoClient" />
+                  </th>
+                  <th
+                    className="px-2 py-1 border w-[100px] cursor-pointer"
+                    onClick={() => requestSort("commission")}
+                  >
                     {t("commission")} (€)
+                    <SortArrow colKey="commission" />
                   </th>
-                  <th className="px-2 py-1 border w-40">
+                  <th
+                    className="px-2 py-1 border w-[100px] cursor-pointer"
+                    onClick={() => requestSort("crocusProfit")}
+                  >
                     {t("crocusProfit")} (€)
+                    <SortArrow colKey="crocusProfit" />
                   </th>
-                  <th className="px-2 py-1 border">{t("status")}</th>
-                  <th className="px-2 py-1 border">{t("invoice")}</th>
-                  <th className="px-2 py-1 border">{t("vouchers")}</th>
-                  <th className="px-2 py-1 border">{t("actions")}</th>
+                  <th
+                    className="px-2 py-1 border w-[120px] cursor-pointer"
+                    onClick={() => requestSort("status")}
+                  >
+                    {t("status")}
+                    <SortArrow colKey="status" />
+                  </th>
+                  <th className="px-2 py-1 border w-[100px]">{t("invoice")}</th>
+                  <th className="px-2 py-1 border w-[120px]">{t("vouchers")}</th>
+                  <th className="px-2 py-1 border w-[100px]">{t("actions")}</th>
                 </tr>
-                <tr className="bg-white border-b text-center">
-                  <td />
-                  <td />
-                  <td />
-                  <td>
+
+                {/* Фильтры */}
+                <tr className="bg-white text-center">
+                  <th className="px-1 py-0.5 border w-[100px]">
                     <Input
-                      className={smallInp}
+                      type="date"
+                      value={filters.dateFrom}
+                      onChange={(e) =>
+                        setFilters((f) => ({
+                          ...f,
+                          dateFrom: e.target.value,
+                        }))
+                      }
+                      className="mb-1 h-6 w-full text-xs"
+                    />
+                    <Input
+                      type="date"
+                      value={filters.dateTo}
+                      onChange={(e) =>
+                        setFilters((f) => ({
+                          ...f,
+                          dateTo: e.target.value,
+                        }))
+                      }
+                      className="h-6 w-full text-xs"
+                    />
+                  </th>
+                  <th className="px-1 py-0.5 border w-[80px]" />
+                  <th className="px-1 py-0.5 border w-[200px]">
+                    <Input
+                      value={filters.agentName}
+                      onChange={(e) =>
+                        setFilters((f) => ({
+                          ...f,
+                          agentName: e.target.value,
+                        }))
+                      }
+                      placeholder={t("filter")}
+                      className="h-8 w-full text-xs"
+                    />
+                  </th>
+                  <th className="px-1 py-0.5 border w-[150px]">
+                    <Input
                       value={filters.operator}
                       onChange={(e) =>
-                        setFilters({ ...filters, operator: e.target.value })
+                        setFilters((f) => ({
+                          ...f,
+                          operator: e.target.value,
+                        }))
                       }
                       placeholder={t("filter")}
+                      className="h-8 w-full text-xs"
                     />
-                  </td>
-                  <td>
+                  </th>
+                  <th className="px-1 py-0.5 border w-[400px]">
                     <Input
-                      className={smallInp}
                       value={filters.hotel}
                       onChange={(e) =>
-                        setFilters({ ...filters, hotel: e.target.value })
+                        setFilters((f) => ({ ...f, hotel: e.target.value }))
                       }
                       placeholder={t("filter")}
+                      className="h-8 w-full text-xs"
                     />
-                  </td>
-                  <td />
-                  <td />
-                  <td />
-                  <td />
-                  <td />
-                  <td>
+                  </th>
+                  <th className="px-1 py-0.5 border w-[120px]">
+                    <Input
+                      type="date"
+                      value={filters.checkInFrom}
+                      onChange={(e) =>
+                        setFilters((f) => ({
+                          ...f,
+                          checkInFrom: e.target.value,
+                        }))
+                      }
+                      className="mb-1 h-6 w-full text-xs"
+                    />
+                    <Input
+                      type="date"
+                      value={filters.checkInTo}
+                      onChange={(e) =>
+                        setFilters((f) => ({
+                          ...f,
+                          checkInTo: e.target.value,
+                        }))
+                      }
+                      className="h-6 w-full text-xs"
+                    />
+                  </th>
+                  <th className="px-1 py-0.5 border w-[120px]">
+                    <Input
+                      type="date"
+                      value={filters.checkOutFrom}
+                      onChange={(e) =>
+                        setFilters((f) => ({
+                          ...f,
+                          checkOutFrom: e.target.value,
+                        }))
+                      }
+                      className="mb-1 h-6 w-full text-xs"
+                    />
+                    <Input
+                      type="date"
+                      value={filters.checkOutTo}
+                      onChange={(e) =>
+                        setFilters((f) => ({
+                          ...f,
+                          checkOutTo: e.target.value,
+                        }))
+                      }
+                      className="h-6 w-full text-xs"
+                    />
+                  </th>
+                  <th className="px-1 py-0.5 border w-[100px]" />
+                  <th className="px-1 py-0.5 border w-[100px]" />
+                  <th className="px-1 py-0.5 border w-[100px]" />
+                  <th className="px-1 py-0.5 border w-[120px]">
                     <Select
                       value={filters.status}
                       onValueChange={(v) =>
-                        setFilters({ ...filters, status: v })
+                        setFilters((f) => ({ ...f, status: v }))
                       }
                     >
-                      <SelectTrigger className="w-32 h-8">
+                      <SelectTrigger className="w-full h-8 text-xs">
                         <SelectValue placeholder={t("statusFilter.all")} />
                       </SelectTrigger>
                       <SelectContent>
@@ -273,23 +485,23 @@ const filtered = bookings.filter((b) => {
                         ))}
                       </SelectContent>
                     </Select>
-                  </td>
-                  <td />
-                  <td />
-                  <td />
+                  </th>
+                  <th className="w-[100px]" />
+                  <th className="w-[120px]" />
+                  <th className="w-[100px]" />
                 </tr>
               </thead>
 
               <tbody>
-                {filtered.map((b) => {
+                {displayed.map((b) => {
                   const created = b.createdAt?.toDate
                     ? format(b.createdAt.toDate(), "dd.MM.yyyy")
                     : "-";
-                  const crocusProfit = (
+                  const profit = (
                     (b.bruttoClient || 0) -
                     (b.internalNet || 0) -
                     (b.commission || 0) -
-                    ((b.commission || 0) / 0.9 - (b.commission || 0)) -
+                    ((b.commission || 0) / 0.9 - b.commission) -
                     (b.bankFeeAmount || 0)
                   ).toFixed(2);
 
@@ -298,48 +510,46 @@ const filtered = bookings.filter((b) => {
                       key={b.id}
                       className="border-t hover:bg-gray-50 text-center"
                     >
-                      <td className="px-2 py-1 border whitespace-nowrap">
+                      <td className="px-2 py-1 border w-[100px] whitespace-nowrap">
                         {created}
                       </td>
-                      <td className="px-2 py-1 border whitespace-nowrap">
+                      <td className="px-2 py-1 border w-[80px] whitespace-nowrap">
                         {b.bookingNumber || "—"}
                       </td>
-                      <td className="px-2 py-1 border truncate max-w-[160px]">
-                        {b.agentName || "—"} ({b.agentAgency || "—"})
+                      <td className="px-2 py-1 border w-[200px] truncate">
+                        {b.agentName} ({b.agentAgency})
                       </td>
-                      <td className="px-2 py-1 border truncate max-w-[120px]">
+                      <td className="px-2 py-1 border w-[150px] truncate">
                         {b.operator}
                       </td>
-                      <td className="px-2 py-1 border truncate max-w-[160px]">
+                      <td className="px-2 py-1 border w-[400px] truncate text-center">
                         {b.hotel}
                       </td>
-                      <td className="px-2 py-1 border whitespace-nowrap">
+                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
                         {b.checkIn
                           ? format(new Date(b.checkIn), "dd.MM.yyyy")
                           : "-"}
                       </td>
-                      <td className="px-2 py-1 border whitespace-nowrap">
+                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
                         {b.checkOut
                           ? format(new Date(b.checkOut), "dd.MM.yyyy")
                           : "-"}
                       </td>
-                      <td className="px-2 py-1 border w-40 text-right">
+                      <td className="px-2 py-1 border w-[100px] text-right">
                         {(b.bruttoClient || 0).toFixed(2)}
                       </td>
-                      <td className="px-2 py-1 border w-40 text-right">
+                      <td className="px-2 py-1 border w-[100px] text-right">
                         {(b.commission || 0).toFixed(2)}
                       </td>
-                      <td className="px-2 py-1 border w-40 text-right">
-                        {crocusProfit}
+                      <td className="px-2 py-1 border w-[100px] text-right">
+                        {profit}
                       </td>
-                      <td className="px-2 py-1 border">
-                        <Badge
-                          className={`inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium ring-1 ring-inset ring-current rounded-sm ${STATUS_COLORS[b.status as typeof STATUS_KEYS[number]]}`}
-                        >
-                          {t(`statuses.${b.status as string}`)}
+                      <td className="px-2 py-1 border w-[120px]">
+                        <Badge className={`inline-flex px-2 py-1 text-xs rounded-sm ring-1 ring-inset ${STATUS_COLORS[b.status as any]}`}>
+                          {t(`statuses.${b.status}`)}
                         </Badge>
                       </td>
-                      <td className="px-2 py-1 border">
+                      <td className="px-2 py-1 border w-[100px]">
                         {b.invoiceLink ? (
                           <a
                             href={b.invoiceLink}
@@ -353,23 +563,25 @@ const filtered = bookings.filter((b) => {
                           "—"
                         )}
                       </td>
-                      <td className="px-2 py-1 border min-w-[120px]">
-                        {Array.isArray(b.voucherLinks) && b.voucherLinks.length
-                          ? b.voucherLinks.map((l, i) => (
-                              <div key={i}>
-                                <a
-                                  href={l}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-sky-600 hover:underline"
-                                >
-                                  {t("Voucher")} {i + 1}
-                                </a>
-                              </div>
-                            ))
-                          : "—"}
+                      <td className="px-2 py-1 border w-[120px]">
+                        {Array.isArray(b.voucherLinks) && b.voucherLinks.length ? (
+                          b.voucherLinks.map((l, i) => (
+                            <div key={i}>
+                              <a
+                                href={l}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-sky-600 hover:underline"
+                              >
+                                {t("Voucher")} {i + 1}
+                              </a>
+                            </div>
+                          ))
+                        ) : (
+                          "—"
+                        )}
                       </td>
-                      <td className="px-2 py-1 border">
+                      <td className="px-2 py-1 border w-[100px]">
                         <div className="flex gap-2 justify-center">
                           <button
                             title={t("edit")}
@@ -381,9 +593,7 @@ const filtered = bookings.filter((b) => {
                           <button
                             title={t("delete")}
                             className="text-xl hover:scale-110 transition"
-                            onClick={() =>
-                              delBooking(b.id, b.bookingNumber || "—")
-                            }
+                            onClick={() => delBooking(b.id, b.bookingNumber || "—")}
                           >
                             🗑️
                           </button>
@@ -400,21 +610,15 @@ const filtered = bookings.filter((b) => {
                     {t("total")}
                   </td>
                   <td className="px-2 py-2 text-right">
-                    {totalBrutto.toFixed(2)} €
+                    {displayed.reduce((s, b) => s + (b.bruttoClient || 0), 0).toFixed(2)} €
                   </td>
-                  <td className="px-2 py-2 text-right">
-                    {totalCommission.toFixed(2)} €
-                  </td>
-                  <td className="px-2 py-2 text-right">
-                    {totalCrocus.toFixed(2)} €
-                  </td>
-                  <td colSpan={4} />
+                  <td colSpan={5} />
                 </tr>
               </tfoot>
             </table>
           </div>
         </CardContent>
       </Card>
-    </>
+    </ManagerLayout>
   );
 }

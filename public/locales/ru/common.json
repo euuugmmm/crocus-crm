@@ -83,6 +83,8 @@
 "brand": "CROCUS CRM",
 "language": "Язык",
 "navBalances": "Балансы",
+"navFinance": "Финансы",
+"manager.title": "Список заявок мененджера",
 "navPayouts": "Выплаты",
 "statusFilter.all": "Все статусы",
 "departureCity": "Город вылета",
@@ -100,6 +102,7 @@
 "dob": "Дата рождения",
 "pricing": "Цены",
 "profileTitle": "Профиль",
+"exportExcel": "Экспорт в эксель",
 "connectTelegram": "Подключить Telegram",
 "selectNotifyLanguage": "Язык уведомлений",
 "languages": {
