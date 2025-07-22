@@ -2,9 +2,10 @@
 
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "next-i18next";
-import { format } from "date-fns";
+import { format, parse, isValid } from "date-fns";      // ⬅️ parse + isValid
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import InputMask from "react-input-mask-next";
 
 /* ───────── типы ───────── */
 export interface Tourist {
@@ -46,7 +47,6 @@ export interface BookingDTO {
   agentAgency?: string;
   email?: string;
   crocusProfit?: number;
-
   createdAt?: string;
   updatedAt?: string;
 }
@@ -62,13 +62,38 @@ interface Props {
 }
 
 /* ───────── helpers ───────── */
+const parseDMY = (s: string) => {
+  /** пытаемся DD.MM.YYYY, иначе отдаём native */
+  const p = parse(s, "dd.MM.yyyy", new Date());
+  return isValid(p) ? p : new Date(s);
+};
 const age = (dob: string) => {
-  const b = new Date(dob), n = new Date();
+  const b = parseDMY(dob), n = new Date();
   let a = n.getFullYear() - b.getFullYear();
   if (n < new Date(b.setFullYear(b.getFullYear() + a))) a--;
   return a;
 };
-const fmt = (d?: string) => (d ? format(new Date(d), "dd.MM.yyyy") : "—");
+const fmt = (d?: string) => {
+  if (!d) return "—";
+  const parsed = parseDMY(d);
+  return isValid(parsed) ? format(parsed, "dd.MM.yyyy") : "—";
+};
+
+/* ───── маска для дат (DD.MM.YYYY) ───── */
+const renderMaskedInput = (
+  value: string,
+  setter: (v: string) => void,
+  required = false
+) => (
+  <InputMask
+    mask="99.99.9999"
+    value={value}
+    onChange={e => setter(e.target.value)}
+    required={required}
+    placeholder="DD.MM.YYYY"
+    className="w-full border rounded p-2"
+  />
+);
 
 /* ───────── операторы ───────── */
 type OperatorInfo = { label: string; val: string; allowNet: boolean };
@@ -99,12 +124,10 @@ export default function BookingFormManager({
   bookingNumber: pBook = "",
 }: Props) {
   const { t } = useTranslation("common");
-  
 
-  /* ───────── e-mail / agency из Firestore при необходимости ───────── */
+  /* ───────── e-mail / agency ───────── */
   const [emailFS,setEmailFS]   = useState<string>();
   const [agencyFS,setAgencyFS] = useState<string>();
-
   useEffect(()=>{
     if ((pEmail && pAgency) || !initialData.agentId) return;
     getDoc(doc(db,"users",initialData.agentId))
@@ -115,58 +138,52 @@ export default function BookingFormManager({
       })
       .catch(()=>void 0);
   },[pEmail,pAgency,initialData.agentId]);
+  const shownEmail  = pEmail  || initialData.email       || emailFS   || "—";
+  const shownAgency = pAgency || initialData.agentAgency || agencyFS  || "—";
+  const shownBookNo = pBook   || initialData.bookingNumber || initialData.id || "—";
 
-  const shownEmail   = pEmail  || initialData.email       || emailFS   || "—";
-  const shownAgency  = pAgency || initialData.agentAgency || agencyFS  || "—";
-  const shownBookNo  = pBook   || initialData.bookingNumber || initialData.id || "—";
-
-  /* ───────── form state (всё, что нужно в JSX ниже) ───────── */
-  const [operator,setOperator]         = useState(initialData.operator??"");
-  const [region,setRegion]             = useState(initialData.region??"");
-  const [departureCity,setDepartureCity]=useState(initialData.departureCity??"");
-  const [arrivalCity,setArrivalCity]   = useState(initialData.arrivalCity??"");
-  const [flightNumber,setFlightNumber] = useState(initialData.flightNumber??"");
-  const [hotel,setHotel]               = useState(initialData.hotel??"");
-  const [checkIn,setCheckIn]           = useState(initialData.checkIn??"");
-  const [checkOut,setCheckOut]         = useState(initialData.checkOut??"");
-  const [room,setRoom]                 = useState(initialData.room??"");
-  const [mealPlan,setMealPlan]         = useState(initialData.mealPlan??"");
+  /* ───────── form state ───────── */
+  const [operator,setOperator]          = useState(initialData.operator??"");
+  const [region,setRegion]              = useState(initialData.region??"");
+  const [departureCity,setDepartureCity]= useState(initialData.departureCity??"");
+  const [arrivalCity,setArrivalCity]    = useState(initialData.arrivalCity??"");
+  const [flightNumber,setFlightNumber]  = useState(initialData.flightNumber??"");
+  const [hotel,setHotel]                = useState(initialData.hotel??"");
+  const [checkIn,setCheckIn]            = useState(initialData.checkIn??"");
+  const [checkOut,setCheckOut]          = useState(initialData.checkOut??"");
+  const [room,setRoom]                  = useState(initialData.room??"");
+  const [mealPlan,setMealPlan]          = useState(initialData.mealPlan??"");
 
   const [paymentMethod,setPaymentMethod]=useState<"card"|"iban">(initialData.paymentMethod??"card");
-  const [bruttoClient,setBruttoClient] = useState(String(initialData.bruttoClient??""));
+  const [bruttoClient,setBruttoClient]  = useState(String(initialData.bruttoClient??""));
   const [bruttoOperator,setBruttoOperator]=useState(String(initialData.bruttoOperator??""));
   const [nettoOperator,setNettoOperator]=useState(String(initialData.nettoOperator??""));
-  const [internalNet,setInternalNet]   = useState(String(initialData.internalNet??""));
+  const [internalNet,setInternalNet]    = useState(String(initialData.internalNet??""));
   const [bankFeeAmount,setBankFeeAmount]=useState(String(initialData.bankFeeAmount??""));
-  const [commission,setCommission]     = useState<number>(initialData.commission??0);
+  const [commission,setCommission]      = useState<number>(initialData.commission??0);
 
-  const [comment,setComment]           = useState(initialData.comment??"");
-  const [invoiceLink,setInvoiceLink]   = useState(initialData.invoiceLink??"");
-  const [status,setStatus]             = useState<string>((initialData.status as string)??"new");
+  const [comment,setComment]         = useState(initialData.comment??"");
+  const [invoiceLink,setInvoiceLink] = useState(initialData.invoiceLink??"");
+  const [status,setStatus]           = useState<string>((initialData.status as string)??"new");
 
-  const [form, setForm] = useState<any>(initialData || {});
-
-  const [attachments,setAttachments]   = useState<File[]>(initialData.attachments??[]);
-
-  const [tourists,setTourists] = useState<Tourist[]>(
+  const [form, setForm]            = useState<any>(initialData || {});
+  const [attachments,setAttachments]= useState<File[]>(initialData.attachments??[]);
+  const [tourists,setTourists]      = useState<Tourist[]>(
     initialData.tourists?.length
       ? initialData.tourists as Tourist[]
       : [{ name:"",dob:"",passportNumber:"",passportValidUntil:"",nationality:"",hasEUDoc:false,phone:"" }]
   );
 
-  /* ───────── вычисления комиссии ───────── */
+  /* ───────── комиссия ───────── */
   const opInfo  = OPERATORS.find(o=>o.val===operator);
   const allowNet= opInfo?.allowNet ?? false;
-
   useEffect(()=>{
     const bc=parseFloat(bruttoClient)||0;
     const bo=parseFloat(bruttoOperator)||0;
     const net=parseFloat(nettoOperator)||0;
     const share=paymentMethod==="iban"?SHARE_IBAN:SHARE_CARD;
-
     const comm=allowNet?(bc-net)*share : bo*0.03+Math.max(0,bc-bo)*share;
     setCommission(Math.round(comm*100)/100);
-
     if(paymentMethod==="card"){
       if(!bankFeeAmount||bankFeeAmount==="0") setBankFeeAmount((bc*CARD_FEE).toFixed(2));
     } else setBankFeeAmount("0");
@@ -175,10 +192,9 @@ export default function BookingFormManager({
   /* ───────── tourists helpers ───────── */
   const addTourist = () =>
     setTourists(t=>[...t,{ name:"",dob:"",passportNumber:"",passportValidUntil:"",nationality:"",hasEUDoc:false,phone:"" }]);
-  const delTourist = (idx:number) =>
-    setTourists(t=>t.filter((_,i)=>i!==idx));
+  const delTourist = (idx:number) => setTourists(t=>t.filter((_,i)=>i!==idx));
   const chTourist  = (idx:number,f:keyof Tourist,v:any) =>
-    setTourists(t=>t.map((tr,i)=>i===idx?{...tr,[f]:v}:tr));
+    setTourists(t=>t.map((tr,i)=>i===idx?{ ...tr,[f]:v }:tr));
 
   /* ───────── submit ───────── */
   const handleSubmit = (e:FormEvent) => {
@@ -208,7 +224,7 @@ export default function BookingFormManager({
     });
   };
 
-  /* ───────── цифры summary ───────── */
+  /* ───────── summary numbers ───────── */
   const bcVal=parseFloat(bruttoClient)||0;
   const bankVal=parseFloat(bankFeeAmount)||0;
   const bankPct=bcVal?((bankVal/bcVal)*100).toFixed(2):"0.00";
@@ -358,7 +374,7 @@ export default function BookingFormManager({
       </div>
 
       {/* ------- отель и даты ------- */}
-      <label className="block font-medium">Отель</label>
+        <label className="block font-medium">Отель</label>
       <input
         required
         value={hotel}
@@ -369,11 +385,11 @@ export default function BookingFormManager({
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Заезд</label>
-          <input type="date" required value={checkIn} onChange={e => setCheckIn(e.target.value)} className="w-full border rounded p-2" />
+          {renderMaskedInput(checkIn, setCheckIn, true)}
         </div>
         <div>
           <label className="block font-medium">Выезд</label>
-          <input type="date" required value={checkOut} onChange={e => setCheckOut(e.target.value)} className="w-full border rounded p-2" />
+          {renderMaskedInput(checkOut, setCheckOut, true)}
         </div>
       </div>
 
@@ -404,26 +420,14 @@ export default function BookingFormManager({
               onChange={e => chTourist(i, "name", e.target.value)}
               className="border rounded p-2"
             />
-            <input
-              type="date"
-              required
-              value={t.dob}
-              onChange={e => chTourist(i, "dob", e.target.value)}
-              className="border rounded p-2"
-            />
+            {renderMaskedInput(t.dob, v => chTourist(i,"dob",v), true)}
             <input
               placeholder="Паспорт №"
               value={t.passportNumber}
               onChange={e => chTourist(i, "passportNumber", e.target.value)}
               className="border rounded p-2"
             />
-            <input
-              type="date"
-              placeholder="Действителен до"
-              value={t.passportValidUntil}
-              onChange={e => chTourist(i, "passportValidUntil", e.target.value)}
-              className="border rounded p-2"
-            />
+            {renderMaskedInput(t.passportValidUntil, v => chTourist(i,"passportValidUntil",v))}
             <input
               placeholder="Гражданство"
               value={t.nationality}

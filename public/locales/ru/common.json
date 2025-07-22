@@ -7,6 +7,7 @@
   "registerAgent": "Регистрация агента",
   "agencyName": "Название агенства",
   "agentName": "Имя агента",
+  "agent": "Агент",
   "noAccount": "Нет аккаунта?",
   "haveAccount": "Уже есть аккаунт?",
   "createBooking": "Создать заявку",
@@ -185,7 +186,9 @@
   "placeholderComment": "Ваш комментарий…",
   "send": "Отправить",
   "sending": "Отправка…",
-
+  "crocusProfit": "Доход CROCUS",
+  "actions": "Действия",
+  
   "olimpyaProfitBeforeTax": "Доход Olimpya (до налога)",
   "olimpyaNetPayout": "К выплате (после налога)",
   "payoutType": "Тип выплаты",
