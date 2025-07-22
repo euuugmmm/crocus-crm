@@ -97,9 +97,7 @@ export default function ManagerBookings() {
     }
     const q = query(collection(db, "bookings"));
     const unsub = onSnapshot(q, (snap) => {
-      setBookings(
-        snap.docs.map((d) => ({ id: d.id, ...(d.data() as Booking) }))
-      );
+      setBookings(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Booking) })));
     });
     return () => unsub();
   }, [user, isManager, router]);
@@ -109,69 +107,24 @@ export default function ManagerBookings() {
   const displayed = React.useMemo(() => {
     let arr = bookings.filter((b) => {
       const created = b.createdAt?.toDate();
-      if (
-        filters.dateFrom &&
-        (!created || created < parseDate(filters.dateFrom)!)
-      )
-        return false;
-      if (
-        filters.dateTo &&
-        (!created || created > parseDate(filters.dateTo)!)
-      )
-        return false;
+      if (filters.dateFrom && (!created || created < parseDate(filters.dateFrom)!)) return false;
+      if (filters.dateTo && (!created || created > parseDate(filters.dateTo)!)) return false;
 
       const ci = b.checkIn ? new Date(b.checkIn) : null;
-      if (
-        filters.checkInFrom &&
-        (!ci || ci < parseDate(filters.checkInFrom)!)
-      )
-        return false;
-      if (filters.checkInTo && (!ci || ci > parseDate(filters.checkInTo)!))
-        return false;
+      if (filters.checkInFrom && (!ci || ci < parseDate(filters.checkInFrom)!)) return false;
+      if (filters.checkInTo && (!ci || ci > parseDate(filters.checkInTo)!)) return false;
 
       const co = b.checkOut ? new Date(b.checkOut) : null;
-      if (
-        filters.checkOutFrom &&
-        (!co || co < parseDate(filters.checkOutFrom)!)
-      )
-        return false;
-      if (
-        filters.checkOutTo &&
-        (!co || co > parseDate(filters.checkOutTo)!)
-      )
-        return false;
+      if (filters.checkOutFrom && (!co || co < parseDate(filters.checkOutFrom)!)) return false;
+      if (filters.checkOutTo && (!co || co > parseDate(filters.checkOutTo)!)) return false;
 
-      if (
-        !b.bookingNumber
-          ?.toLowerCase()
-          .includes(filters.bookingNumber.toLowerCase())
-      )
-        return false;
-      if (
-        !b.agentName
-          ?.toLowerCase()
-          .includes(filters.agentName.toLowerCase())
-      )
-        return false;
-      if (
-        !b.operator
-          ?.toLowerCase()
-          .includes(filters.operator.toLowerCase())
-      )
-        return false;
-      if (!b.hotel?.toLowerCase().includes(filters.hotel.toLowerCase()))
-        return false;
+      if (!b.bookingNumber?.toLowerCase().includes(filters.bookingNumber.toLowerCase())) return false;
+      if (!b.agentName?.toLowerCase().includes(filters.agentName.toLowerCase())) return false;
+      if (!b.operator?.toLowerCase().includes(filters.operator.toLowerCase())) return false;
+      if (!b.hotel?.toLowerCase().includes(filters.hotel.toLowerCase())) return false;
 
-      if (
-        filters.bruttoClient &&
-        (b.bruttoClient || 0).toFixed(2) !== filters.bruttoClient
-      )
-        return false;
-      if (
-        filters.commission &&
-        (b.commission || 0).toFixed(2) !== filters.commission
-      )
-        return false;
+      if (filters.bruttoClient && (b.bruttoClient || 0).toFixed(2) !== filters.bruttoClient) return false;
+      if (filters.commission && (b.commission || 0).toFixed(2) !== filters.commission) return false;
 
       if (filters.crocusProfit) {
         const profit =
@@ -183,12 +136,19 @@ export default function ManagerBookings() {
         if (profit.toFixed(2) !== filters.crocusProfit) return false;
       }
 
-      if (filters.status !== "all" && b.status !== filters.status)
-        return false;
+      if (filters.status !== "all" && b.status !== filters.status) return false;
       return true;
     });
 
-    if (sortConfig) {
+    // По умолчанию: новые сверху
+    if (!sortConfig) {
+      arr = [...arr].sort((a, b) => {
+        const aTime = a.createdAt?.toDate().getTime() || 0;
+        const bTime = b.createdAt?.toDate().getTime() || 0;
+        return bTime - aTime;
+      });
+    } else {
+      // Сортировка по выбранной колонке
       arr = [...arr].sort((a, b) => {
         const getValue = (obj: Booking) => {
           switch (sortConfig.key) {
@@ -232,10 +192,7 @@ export default function ManagerBookings() {
 
   const statusOptions = [
     { value: "all", label: t("statusFilter.all") },
-    ...STATUS_KEYS.map((key) => ({
-      value: key,
-      label: t(`statuses.${key}`),
-    })),
+    ...STATUS_KEYS.map((key) => ({ value: key, label: t(`statuses.${key}`) })),
   ];
 
   const SortArrow = ({ colKey }: { colKey: string }) =>
@@ -249,6 +206,21 @@ export default function ManagerBookings() {
     if (!confirm(`${t("confirmDelete")} ${num}?`)) return;
     await deleteDoc(doc(db, "bookings", id));
   };
+
+  // Вычисляем итоги
+  const sumBrutto = displayed.reduce((s, b) => s + (b.bruttoClient || 0), 0).toFixed(2);
+  const sumCommission = displayed.reduce((s, b) => s + (b.commission || 0), 0).toFixed(2);
+  const sumProfit = displayed
+    .reduce((s, b) => {
+      const profit =
+        (b.bruttoClient || 0) -
+        (b.internalNet || 0) -
+        (b.commission || 0) -
+        ((b.commission || 0) / 0.9 - b.commission) -
+        (b.bankFeeAmount || 0);
+      return s + profit;
+    }, 0)
+    .toFixed(2);
 
   return (
     <ManagerLayout>
@@ -270,32 +242,23 @@ export default function ManagerBookings() {
 
           {/* Таблица */}
           <div className="overflow-x-auto">
-            <table
-              ref={tableRef}
-              className="min-w-[1400px] w-full border text-sm"
-            >
+            <table ref={tableRef} className="min-w-[1400px] w-full border text-sm">
               <thead className="bg-gray-100 text-center">
                 {/* Заголовки */}
                 <tr>
-                  <th
-                    className="px-2 py-1 border w-[100px] cursor-pointer"
-                    onClick={() => requestSort("date")}
-                  >
+                  <th className="px-2 py-1 border w-[100px] cursor-pointer" onClick={() => requestSort("date")}>
                     {t("date")}
                     <SortArrow colKey="date" />
                   </th>
-                  <th className="px-2 py-1 border w-[80px]">{t("№")}</th>
-                  <th
-                    className="px-2 py-1 border w-[200px] cursor-pointer"
-                    onClick={() => requestSort("agentName")}
-                  >
+                  <th className="px-2 py-1 border w-[80px] cursor-pointer" onClick={() => requestSort("bookingNumber")}>
+                    {t("№")}
+                    <SortArrow colKey="bookingNumber" />
+                  </th>
+                  <th className="px-2 py-1 border w-[200px] cursor-pointer" onClick={() => requestSort("agentName")}>
                     {t("agent")}
                     <SortArrow colKey="agentName" />
                   </th>
-                  <th
-                    className="px-2 py-1 border w-[150px] cursor-pointer"
-                    onClick={() => requestSort("operator")}
-                  >
+                  <th className="px-2 py-1 border w-[150px] cursor-pointer" onClick={() => requestSort("operator")}>
                     {t("operator")}
                     <SortArrow colKey="operator" />
                   </th>
@@ -306,45 +269,36 @@ export default function ManagerBookings() {
                     {t("hotel")}
                     <SortArrow colKey="hotel" />
                   </th>
-                  <th
-                    className="px-2 py-1 border w-[120px] cursor-pointer"
-                    onClick={() => requestSort("checkIn")}
-                  >
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("checkIn")}>
                     {t("checkIn")}
                     <SortArrow colKey="checkIn" />
                   </th>
-                  <th
-                    className="px-2 py-1 border w-[120px] cursor-pointer"
-                    onClick={() => requestSort("checkOut")}
-                  >
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("checkOut")}>
                     {t("checkOut")}
                     <SortArrow colKey="checkOut" />
                   </th>
                   <th
-                    className="px-2 py-1 border w-[100px] cursor-pointer"
+                    className="px-2 py-1 border w-[100px] cursor-pointer text-right"
                     onClick={() => requestSort("bruttoClient")}
                   >
                     {t("client")} (€)
                     <SortArrow colKey="bruttoClient" />
                   </th>
                   <th
-                    className="px-2 py-1 border w-[100px] cursor-pointer"
+                    className="px-2 py-1 border w-[100px] cursor-pointer text-right"
                     onClick={() => requestSort("commission")}
                   >
                     {t("commission")} (€)
                     <SortArrow colKey="commission" />
                   </th>
                   <th
-                    className="px-2 py-1 border w-[100px] cursor-pointer"
+                    className="px-2 py-1 border w-[100px] cursor-pointer text-right"
                     onClick={() => requestSort("crocusProfit")}
                   >
                     {t("crocusProfit")} (€)
                     <SortArrow colKey="crocusProfit" />
                   </th>
-                  <th
-                    className="px-2 py-1 border w-[120px] cursor-pointer"
-                    onClick={() => requestSort("status")}
-                  >
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("status")}>
                     {t("status")}
                     <SortArrow colKey="status" />
                   </th>
@@ -352,43 +306,34 @@ export default function ManagerBookings() {
                   <th className="px-2 py-1 border w-[120px]">{t("vouchers")}</th>
                   <th className="px-2 py-1 border w-[100px]">{t("actions")}</th>
                 </tr>
-
                 {/* Фильтры */}
                 <tr className="bg-white text-center">
                   <th className="px-1 py-0.5 border w-[100px]">
                     <Input
                       type="date"
                       value={filters.dateFrom}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          dateFrom: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
                       className="mb-1 h-6 w-full text-xs"
                     />
                     <Input
                       type="date"
                       value={filters.dateTo}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          dateTo: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
                       className="h-6 w-full text-xs"
                     />
                   </th>
-                  <th className="px-1 py-0.5 border w-[80px]" />
+                  <th className="px-1 py-0.5 border w-[80px]">
+                    <Input
+                      value={filters.bookingNumber}
+                      onChange={(e) => setFilters((f) => ({ ...f, bookingNumber: e.target.value }))}
+                      placeholder="#"
+                      className="h-8 w-full text-xs"
+                    />
+                  </th>
                   <th className="px-1 py-0.5 border w-[200px]">
                     <Input
                       value={filters.agentName}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          agentName: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, agentName: e.target.value }))}
                       placeholder={t("filter")}
                       className="h-8 w-full text-xs"
                     />
@@ -396,12 +341,7 @@ export default function ManagerBookings() {
                   <th className="px-1 py-0.5 border w-[150px]">
                     <Input
                       value={filters.operator}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          operator: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, operator: e.target.value }))}
                       placeholder={t("filter")}
                       className="h-8 w-full text-xs"
                     />
@@ -409,9 +349,7 @@ export default function ManagerBookings() {
                   <th className="px-1 py-0.5 border w-[400px]">
                     <Input
                       value={filters.hotel}
-                      onChange={(e) =>
-                        setFilters((f) => ({ ...f, hotel: e.target.value }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, hotel: e.target.value }))}
                       placeholder={t("filter")}
                       className="h-8 w-full text-xs"
                     />
@@ -420,23 +358,13 @@ export default function ManagerBookings() {
                     <Input
                       type="date"
                       value={filters.checkInFrom}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          checkInFrom: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, checkInFrom: e.target.value }))}
                       className="mb-1 h-6 w-full text-xs"
                     />
                     <Input
                       type="date"
                       value={filters.checkInTo}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          checkInTo: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, checkInTo: e.target.value }))}
                       className="h-6 w-full text-xs"
                     />
                   </th>
@@ -444,35 +372,44 @@ export default function ManagerBookings() {
                     <Input
                       type="date"
                       value={filters.checkOutFrom}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          checkOutFrom: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, checkOutFrom: e.target.value }))}
                       className="mb-1 h-6 w-full text-xs"
                     />
                     <Input
                       type="date"
                       value={filters.checkOutTo}
-                      onChange={(e) =>
-                        setFilters((f) => ({
-                          ...f,
-                          checkOutTo: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setFilters((f) => ({ ...f, checkOutTo: e.target.value }))}
                       className="h-6 w-full text-xs"
                     />
                   </th>
-                  <th className="px-1 py-0.5 border w-[100px]" />
-                  <th className="px-1 py-0.5 border w-[100px]" />
-                  <th className="px-1 py-0.5 border w-[100px]" />
+                  <th className="px-1 py-0.5 border w-[100px]">
+                    <Input
+                      value={filters.bruttoClient}
+                      onChange={(e) => setFilters((f) => ({ ...f, bruttoClient: e.target.value }))}
+                      placeholder="0.00"
+                      className="h-8 w-full text-xs text-right"
+                    />
+                  </th>
+                  <th className="px-1 py-0.5 border w-[100px]">
+                    <Input
+                      value={filters.commission}
+                      onChange={(e) => setFilters((f) => ({ ...f, commission: e.target.value }))}
+                      placeholder="0.00"
+                      className="h-8 w-full text-xs text-right"
+                    />
+                  </th>
+                  <th className="px-1 py-0.5 border w-[100px]">
+                    <Input
+                      value={filters.crocusProfit}
+                      onChange={(e) => setFilters((f) => ({ ...f, crocusProfit: e.target.value }))}
+                      placeholder="0.00"
+                      className="h-8 w-full text-xs text-right"
+                    />
+                  </th>
                   <th className="px-1 py-0.5 border w-[120px]">
                     <Select
                       value={filters.status}
-                      onValueChange={(v) =>
-                        setFilters((f) => ({ ...f, status: v }))
-                      }
+                      onValueChange={(v) => setFilters((f) => ({ ...f, status: v }))}
                     >
                       <SelectTrigger className="w-full h-8 text-xs">
                         <SelectValue placeholder={t("statusFilter.all")} />
@@ -494,56 +431,26 @@ export default function ManagerBookings() {
 
               <tbody>
                 {displayed.map((b) => {
-                  const created = b.createdAt?.toDate
-                    ? format(b.createdAt.toDate(), "dd.MM.yyyy")
-                    : "-";
-                  const profit = (
-                    (b.bruttoClient || 0) -
-                    (b.internalNet || 0) -
-                    (b.commission || 0) -
-                    ((b.commission || 0) / 0.9 - b.commission) -
-                    (b.bankFeeAmount || 0)
-                  ).toFixed(2);
-
+                  const created = b.createdAt?.toDate ? format(b.createdAt.toDate(), "dd.MM.yyyy") : "-";
+                  const profit =
+                    ((b.bruttoClient || 0) -
+                      (b.internalNet || 0) -
+                      (b.commission || 0) -
+                      ((b.commission || 0) / 0.9 - b.commission) -
+                      (b.bankFeeAmount || 0))
+                      .toFixed(2);
                   return (
-                    <tr
-                      key={b.id}
-                      className="border-t hover:bg-gray-50 text-center"
-                    >
-                      <td className="px-2 py-1 border w-[100px] whitespace-nowrap">
-                        {created}
-                      </td>
-                      <td className="px-2 py-1 border w-[80px] whitespace-nowrap">
-                        {b.bookingNumber || "—"}
-                      </td>
-                      <td className="px-2 py-1 border w-[200px] truncate">
-                        {b.agentName} ({b.agentAgency})
-                      </td>
-                      <td className="px-2 py-1 border w-[150px] truncate">
-                        {b.operator}
-                      </td>
-                      <td className="px-2 py-1 border w-[400px] truncate text-center">
-                        {b.hotel}
-                      </td>
-                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
-                        {b.checkIn
-                          ? format(new Date(b.checkIn), "dd.MM.yyyy")
-                          : "-"}
-                      </td>
-                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
-                        {b.checkOut
-                          ? format(new Date(b.checkOut), "dd.MM.yyyy")
-                          : "-"}
-                      </td>
-                      <td className="px-2 py-1 border w-[100px] text-right">
-                        {(b.bruttoClient || 0).toFixed(2)}
-                      </td>
-                      <td className="px-2 py-1 border w-[100px] text-right">
-                        {(b.commission || 0).toFixed(2)}
-                      </td>
-                      <td className="px-2 py-1 border w-[100px] text-right">
-                        {profit}
-                      </td>
+                    <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
+                      <td className="px-2 py-1 border w-[100px] whitespace-nowrap">{created}</td>
+                      <td className="px-2 py-1 border w-[80px] whitespace-nowrap">{b.bookingNumber || "—"}</td>
+                      <td className="px-2 py-1 border w-[200px] truncate">{b.agentName} ({b.agentAgency})</td>
+                      <td className="px-2 py-1 border w-[150px] truncate">{b.operator}</td>
+                      <td className="px-2 py-1 border w-[400px] truncate text-center">{b.hotel}</td>
+                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">{b.checkIn ? format(new Date(b.checkIn), "dd.MM.yyyy") : "-"}</td>
+                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">{b.checkOut ? format(new Date(b.checkOut), "dd.MM.yyyy") : "-"}</td>
+                      <td className="px-2 py-1 border w-[100px] text-right">{(b.bruttoClient || 0).toFixed(2)}</td>
+                      <td className="px-2 py-1 border w-[100px] text-right">{(b.commission || 0).toFixed(2)}</td>
+                      <td className="px-2 py-1 border w-[100px] text-right">{profit}</td>
                       <td className="px-2 py-1 border w-[120px]">
                         <Badge className={`inline-flex px-2 py-1 text-xs rounded-sm ring-1 ring-inset ${STATUS_COLORS[b.status as any]}`}>
                           {t(`statuses.${b.status}`)}
@@ -551,12 +458,7 @@ export default function ManagerBookings() {
                       </td>
                       <td className="px-2 py-1 border w-[100px]">
                         {b.invoiceLink ? (
-                          <a
-                            href={b.invoiceLink}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-indigo-600 hover:underline"
-                          >
+                          <a href={b.invoiceLink} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
                             {t("Open")}
                           </a>
                         ) : (
@@ -564,37 +466,22 @@ export default function ManagerBookings() {
                         )}
                       </td>
                       <td className="px-2 py-1 border w-[120px]">
-                        {Array.isArray(b.voucherLinks) && b.voucherLinks.length ? (
-                          b.voucherLinks.map((l, i) => (
-                            <div key={i}>
-                              <a
-                                href={l}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-sky-600 hover:underline"
-                              >
-                                {t("Voucher")} {i + 1}
-                              </a>
-                            </div>
-                          ))
-                        ) : (
-                          "—"
-                        )}
+                        {Array.isArray(b.voucherLinks) && b.voucherLinks.length
+                          ? b.voucherLinks.map((l, i) => (
+                              <div key={i}>
+                                <a href={l} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">
+                                  {t("Voucher")} {i + 1}
+                                </a>
+                              </div>
+                            ))
+                          : "—"}
                       </td>
                       <td className="px-2 py-1 border w-[100px]">
                         <div className="flex gap-2 justify-center">
-                          <button
-                            title={t("edit")}
-                            className="text-xl hover:scale-110 transition"
-                            onClick={() => router.push(`/manager/${b.id}`)}
-                          >
+                          <button title={t("edit")} className="text-xl hover:scale-110 transition" onClick={() => router.push(`/manager/${b.id}`)}>
                             ✏️
                           </button>
-                          <button
-                            title={t("delete")}
-                            className="text-xl hover:scale-110 transition"
-                            onClick={() => delBooking(b.id, b.bookingNumber || "—")}
-                          >
+                          <button title={t("delete")} className="text-xl hover:scale-110 transition" onClick={() => delBooking(b.id, b.bookingNumber || "—")}>
                             🗑️
                           </button>
                         </div>
@@ -606,13 +493,19 @@ export default function ManagerBookings() {
 
               <tfoot className="bg-gray-100 font-semibold">
                 <tr>
+                  {/* объединяем первые 7 колонок для заголовка «Итого» */}
                   <td colSpan={7} className="px-2 py-2 text-right">
                     {t("total")}
                   </td>
-                  <td className="px-2 py-2 text-right">
-                    {displayed.reduce((s, b) => s + (b.bruttoClient || 0), 0).toFixed(2)} €
-                  </td>
-                  <td colSpan={5} />
+                  {/* итоговые суммы */}
+                  <td className="px-2 py-2 text-right">{sumBrutto}</td>
+                  <td className="px-2 py-2 text-right">{sumCommission}</td>
+                  <td className="px-2 py-2 text-right">{sumProfit}</td>
+                  {/* и последние 4 пустые */}
+                  <td />
+                  <td />
+                  <td />
+                  <td />
                 </tr>
               </tfoot>
             </table>
