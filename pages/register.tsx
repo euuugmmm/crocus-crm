@@ -1,4 +1,5 @@
 // pages/register.tsx
+
 import { useState } from "react";
 import { useRouter } from "next/router";
 import {
@@ -51,12 +52,23 @@ export default function Register() {
         agentName,
         email,
         role       : "agent",
-        agentNo,           // ← полученный номер
+        agentNo,
         contractSeq: 0,
         createdAt  : new Date(),
       });
 
-      /* ➍ уведомляем менеджеров (телеграм-бот) */
+      /* ➍ выставляем custom-claim role=agent через защищённый API-роут */
+      const idToken = await user.getIdToken(); // свежий JWT
+      await fetch("/api/users/set-role", {
+        method : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ uid: user.uid, role: "agent" }),
+      });
+
+      /* ➎ уведомляем менеджеров (телеграм-бот) */
       fetch("/api/telegram/notify", {
         method : "POST",
         headers: { "Content-Type": "application/json" },
@@ -67,7 +79,7 @@ export default function Register() {
         }),
       }).catch((err) => console.error("[tg notify]", err));
 
-      /* ➎ обновляем displayName и переходим */
+      /* ➏ обновляем displayName и переходим */
       await updateProfile(user, { displayName: agentName });
       router.push("/agent/bookings");
     } catch (err: any) {

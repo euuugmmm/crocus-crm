@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/router";
 import {
   doc,
@@ -14,9 +13,9 @@ import {
 
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/context/AuthContext";
-import BookingFormOlimpya from "@/components/BookingFormOlimpya";
-import { Button } from "@/components/ui/button";
-import LanguageSwitcher from "@/components/LanguageSwitcher";
+import BookingForm from "@/components/BookingFormOlimpya";
+import OlimpyaLayout from "@/components/layouts/OlimpyaLayout";
+
 import { useTranslation } from "next-i18next";
 import { serverSideTranslations } from "next-i18next/serverSideTranslations";
 
@@ -26,127 +25,135 @@ export async function getServerSideProps({ locale }: { locale: string }) {
   };
 }
 
-export default function OlimpyNewBooking() {
-  const router                     = useRouter();
-  const { user, userData, loading,
-          isOlimpya, logout }      = useAuth();
-  const { t }                      = useTranslation("common");
-  const [bookingNumber,setNumber]  = useState("");
+export default function NewBooking() {
+  const router = useRouter();
+  const { user, userData, loading, isOlimpya } = useAuth();
+  const { t } = useTranslation("common");
+  const [bookingNumber, setBookingNumber] = useState<string>("");
 
-  /* ───────── guards & counter ───────── */
   useEffect(() => {
-    if (loading)               return;
-    if (!user)                 { router.replace("/login"); return; }
-    if (!isOlimpya)            { router.replace("/");      return; }
-    genNumber();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading,user,isOlimpya]);
+    let active = true;
+    if (!active) return;
 
-  async function genNumber() {
-    const ref  = doc(db,"counters","bookingNumber");
-    const next = await runTransaction(db, async tr => {
-      const cur = (await tr.get(ref)).data()?.value ?? 1000;
-      tr.update(ref,{ value: increment(1) });
-      return cur+1;
+    if (loading) return;
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+    if (!isOlimpya) {
+      router.replace("/olumpya/bookings");
+      return;
+    }
+    generateBookingNumber();
+
+    return () => {
+      active = false;
+    };
+  }, [user, loading, isOlimpya, router]);
+
+  async function generateBookingNumber() {
+    const ref = doc(db, "counters", "bookingNumber");
+    const next = await runTransaction(db, async (tr) => {
+      const snap = await tr.get(ref);
+      const cur = snap.data()?.value ?? 1000;
+      tr.update(ref, { value: increment(1) });
+      return cur + 1;
     });
-    setNumber(`OLP-${String(next).padStart(5,"0")}`);
+    setBookingNumber(`CRT-${String(next * 7).padStart(5, "0")}`);
   }
 
-  /* ───────── первичный расчёт дохода ─────────
-     для стартовой записи считаем ТОЛЬКО доход Olimpya:
-       olimpya_profit = bruttoClient - bruttoOperator
-       crocus_profit  = 0
-     ai/ue profits будут выставлены менеджером после ввода
-     реального nettoOperator.                                         */
-  function calcInitOlimpyaProfit(bruttoClient:number, bruttoOperator:number){
-    return +(bruttoClient - bruttoOperator).toFixed(2);
+  function calcCommission({
+    operator,
+    bruttoClient = 0,
+    internalNet = 0,
+    bruttoOperator = 0,
+    paymentMethod,
+  }: {
+    operator: string;
+    bruttoClient: number;
+    internalNet: number;
+    bruttoOperator: number;
+    paymentMethod: string;
+  }) {
+    // здесь можно скорректировать логику для olympya, 
+    // если нужно иное деление комиссий — оставил базовую
+    const share = paymentMethod === "iban" ? 0.85 : 0.8;
+    const bankFee = paymentMethod === "card" ? bruttoClient * 0.015 : 0;
+    let commission = 0;
+
+    if (["TOCO TOUR RO", "TOCO TOUR MD"].includes(operator)) {
+      commission = (bruttoClient - internalNet) * share;
+    } else {
+      const markup = Math.max(0, bruttoClient - bruttoOperator);
+      commission = bruttoOperator * 0.03 + markup * share;
+    }
+
+    return { agent: +commission.toFixed(2), bankFee: +bankFee.toFixed(2) };
   }
 
-  /* ───────── submit ───────── */
-  async function handleCreate(form:any){
-    const olimpya_profit = calcInitOlimpyaProfit(
-      form.bruttoClient || 0,
-      form.bruttoOperator || 0
-    );
+  async function handleCreate(form: any) {
+    const { agent, bankFee } = calcCommission({
+      operator: form.operator,
+      bruttoClient: form.bruttoClient,
+      internalNet: form.nettoOperator,
+      bruttoOperator: form.bruttoOperator,
+      paymentMethod: form.paymentMethod,
+    });
 
     await setDoc(
-      doc(db,"bookings",bookingNumber),
+      doc(db, "bookings", bookingNumber),
       {
         bookingNumber,
-        ...form,                          // все поля из формы
-        olimpya_profit,                   // ✨ пока только этот доход
-        crocus_profit: 0,
-        ai_profit      : 0,
-        ue_profit      : 0,
-        agentId        : user!.uid,
-        agentName      : userData?.agentName ?? "",
-        segment        : "olimpya",
-        status         : "new",
-        createdAt      : Timestamp.now(),
+        ...form,
+        bookingType: "olimpya_base",         // ← добавлено поле bookingType
+        commission: agent,
+        bankFee,
+        agentId: user!.uid,
+        agentName: userData?.agentName ?? "",
+        agentAgency: userData?.agencyName ?? "",
+        status: "new",
+        createdAt: Timestamp.now(),
       },
-      { merge:true }
+      { merge: true }
     );
 
-    /* Telegram для менеджеров */
-    await fetch("/api/telegram/notify",{
-      method : "POST",
-      headers: { "Content-Type":"application/json" },
-      body   : JSON.stringify({
-        managers : true,
-        type     : "newBooking",
-        data     : {
+    // уведомление в Telegram
+    await fetch("/api/telegram/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agentId: user!.uid,
+        managers: true,
+        type: "newBooking",
+        data: {
           bookingNumber,
-          hotel   : form.hotel    || "—",
+          hotel: form.hotel || "—",
           operator: form.operator || "—",
-          segment : "Olimpya",
-        }
-      })
+          agentName: userData?.agentName ?? "",
+          agentAgency: userData?.agencyName ?? "",
+        },
+      }),
     }).catch(console.error);
 
+    // перенаправление на список бронирований olimpya
     router.push("/olimpya/bookings");
   }
 
-  if (loading || !bookingNumber) return <p className="text-center mt-6">…</p>;
-
-  const nav = [
-    { href:"/olimpya/bookings", label:t("navBookings") },
-    { href:"/olimpya/balance",  label:t("navBalance")  },
-    { href:"/olimpya/history",  label:t("navHistory")  },
-  ];
-  const isActive = (h:string)=>router.pathname.startsWith(h);
+  if (loading || !bookingNumber) {
+    return <p className="text-center mt-4">…</p>;
+  }
 
   return (
-    <>
-      <LanguageSwitcher/>
-      <header className="w-full bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <span className="font-bold text-lg">CROCUS&nbsp;CRM</span>
-          <nav className="flex gap-4">
-            {nav.map(n=>(
-              <Link key={n.href} href={n.href}
-                className={`px-3 py-2 text-sm font-medium border-b-2 ${
-                  isActive(n.href)
-                    ? "border-indigo-600 text-black"
-                    : "border-transparent text-gray-600 hover:text-black"}`}>
-                {n.label}
-              </Link>
-            ))}
-          </nav>
-          <Button size="sm" variant="destructive" onClick={logout}>
-            {t("logout")}
-          </Button>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto p-4">
+    <OlimpyaLayout>
+      <div className="max-w-2xl mx-auto px-4 py-6">
         <h1 className="text-2xl font-bold mb-4">{t("newBookingHeader")}</h1>
-
-        <BookingFormOlimpya
+        <BookingForm
           onSubmit={handleCreate}
           bookingNumber={bookingNumber}
           agentName={userData?.agentName ?? ""}
+          agentAgency={userData?.agencyName ?? ""}
         />
-      </main>
-    </>
+      </div>
+    </OlimpyaLayout>
   );
 }

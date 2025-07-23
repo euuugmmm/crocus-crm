@@ -1,7 +1,10 @@
-// context/AuthContext.js
 import { createContext, useContext, useEffect, useState } from "react";
 import { auth, db } from "../firebaseConfig";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { useRouter } from "next/router";
 
@@ -10,57 +13,59 @@ const AuthContext = createContext();
 export function AuthProvider({ children }) {
   const router = useRouter();
   const [user, setUser] = useState(null);        // Firebase Auth user
-  const [userData, setUserData] = useState(null); // Additional Firestore profile (role, name, agency, segment)
+  const [userData, setUserData] = useState(null); // Firestore profile (role, agency, etc.)
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!auth) return; // if Firebase not initialized (server), skip
+    if (!auth) return; // на сервере пропускаем
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        console.log("[Auth] Firebase user:", firebaseUser);
-
-        // Fetch user profile from Firestore
-        const userDocRef = doc(db, "users", firebaseUser.uid);
-        const userDoc = await getDoc(userDocRef);
-
-        if (userDoc.exists()) {
-          console.log("[Auth] Firestore user data:", userDoc.data());
-          setUserData(userDoc.data());
-        } else {
-          console.warn("[Auth] User profile not found for UID:", firebaseUser.uid);
-          setUserData(null);
-        }
+        // берём профиль
+        const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+        setUserData(userDoc.exists() ? userDoc.data() : null);
         setUser(firebaseUser);
       } else {
-        console.log("[Auth] No Firebase user");
         setUser(null);
         setUserData(null);
       }
       setLoading(false);
     });
-    return () => unsubscribe();
+    return unsubscribe;
   }, []);
 
-  // Auth actions
+  // действия
   const login = async (email, password) => {
     if (!auth) return;
     await signInWithEmailAndPassword(auth, email, password);
-    // onAuthStateChanged will handle setting user and redirecting
   };
-
   const logout = async () => {
     if (!auth) return;
     await signOut(auth);
     router.push("/login");
   };
 
-  // Role helpers
-  const isManager = userData?.role === "manager";
-  const isAgent = userData?.role === "agent";
-  const isOlimpya  = userData?.role === "olimpya" || userData?.segment === "olimpya";
+  // роли
+  const isAgent        = userData?.role === "agent";
+  const isManager      = userData?.role === "manager";
+  const isSupermanager = userData?.role === "supermanager";
+  const isAdmin        = userData?.role === "admin";
+  const isOlimpya      = userData?.role === "olimpya_agent";
 
   return (
-    <AuthContext.Provider value={{ user, userData, loading, isManager, isAgent, isOlimpya, login, logout }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        userData,
+        loading,
+        isAgent,
+        isManager,
+        isSupermanager,
+        isAdmin,
+        isOlimpya,
+        login,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

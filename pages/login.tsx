@@ -1,4 +1,3 @@
-// pages/login.tsx
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import { useAuth } from "../context/AuthContext";
@@ -22,9 +21,11 @@ export default function Login() {
     login,
     user,
     loading,
-    isManager,
-    isOlimpya,
     isAgent,
+    isManager,
+    isSupermanager,
+    isAdmin,
+    isOlimpya,
   } = useAuth();
 
   const [email, setEmail] = useState("");
@@ -36,30 +37,41 @@ export default function Login() {
     setError("");
     try {
       await login(email, password);
-    } catch (err) {
-      setError(
-        t("loginError") || "Ошибка входа. Проверьте email и пароль."
-      );
+    } catch (err: any) {
+      setError(t("loginError") || "Ошибка входа. Проверьте email и пароль.");
       console.error("Login error:", err);
     }
   };
 
   useEffect(() => {
-    // wait until we've resolved auth
     if (loading) return;
 
     if (user) {
-      if (isManager) {
+      // приоритет: admin → supermanager → manager → olimpya → agent
+      if (isAdmin) {
+        router.replace("/manager/bookings");
+      } else if (isSupermanager) {
+        router.replace("/manager/bookings");
+      } else if (isManager) {
         router.replace("/manager/bookings");
       } else if (isOlimpya) {
         router.replace("/olimpya/bookings");
       } else if (isAgent) {
         router.replace("/agent/bookings");
       } else {
-        router.replace("/");
+        router.replace("/"); // fallback
       }
     }
-  }, [user, loading, isManager, isOlimpya, isAgent, router]);
+  }, [
+    user,
+    loading,
+    isAgent,
+    isManager,
+    isSupermanager,
+    isAdmin,
+    isOlimpya,
+    router,
+  ]);
 
   return (
     <>
@@ -77,14 +89,10 @@ export default function Login() {
           </h1>
 
           {error && (
-            <p className="text-red-600 text-sm mb-3 text-center">
-              {error}
-            </p>
+            <p className="text-red-600 text-sm mb-3 text-center">{error}</p>
           )}
 
-          <label className="block text-sm font-medium mb-1">
-            {t("email")}
-          </label>
+          <label className="block text-sm font-medium mb-1">{t("email")}</label>
           <input
             type="email"
             value={email}
