@@ -58,6 +58,13 @@ const STATUS_COLORS: Record<typeof STATUS_KEYS[number], string> = {
   cancelled: "bg-red-50 text-red-700 ring-red-600/10",
 };
 
+// Mapping bookingType values to human-readable labels
+const TYPE_LABELS: Record<string, string> = {
+  olimpya_base: "Олимпия",
+  subagent: "Субагенты",
+  romania: "Румыния",
+};
+
 export default function ManagerBookings() {
   const router = useRouter();
   const { t } = useTranslation("common");
@@ -66,6 +73,7 @@ export default function ManagerBookings() {
 
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [filters, setFilters] = useState({
+    bookingType: "",
     dateFrom: "",
     dateTo: "",
     bookingNumber: "",
@@ -87,17 +95,22 @@ export default function ManagerBookings() {
   } | null>(null);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || !isManager) {
       router.push("/login");
-      return;
-    }
-    if (!isManager) {
-      router.push("/agent/bookings");
       return;
     }
     const q = query(collection(db, "bookings"));
     const unsub = onSnapshot(q, (snap) => {
-      setBookings(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Booking) })));
+      setBookings(
+        snap.docs.map((d) => {
+          const data = d.data() as Booking;
+          return {
+            id: d.id,
+            bookingType: data.bookingType,
+            ...data,
+          };
+        })
+      );
     });
     return () => unsub();
   }, [user, isManager, router]);
@@ -127,20 +140,16 @@ export default function ManagerBookings() {
       if (filters.commission && (b.commission || 0).toFixed(2) !== filters.commission) return false;
 
       if (filters.crocusProfit) {
-        const profit =
-          (b.bruttoClient || 0) -
-          (b.internalNet || 0) -
-          (b.commission || 0) -
-          ((b.commission || 0) / 0.9 - b.commission) -
-          (b.bankFeeAmount || 0);
+        const profit = (b.bruttoClient || 0) - (b.internalNet || 0);
         if (profit.toFixed(2) !== filters.crocusProfit) return false;
       }
 
       if (filters.status !== "all" && b.status !== filters.status) return false;
       return true;
+      if (filters.bookingType && !TYPE_LABELS[b.bookingType]?.toLowerCase().includes(filters.bookingType.toLowerCase())) 
+  return false;
     });
 
-    // По умолчанию: новые сверху
     if (!sortConfig) {
       arr = [...arr].sort((a, b) => {
         const aTime = a.createdAt?.toDate().getTime() || 0;
@@ -148,7 +157,6 @@ export default function ManagerBookings() {
         return bTime - aTime;
       });
     } else {
-      // Сортировка по выбранной колонке
       arr = [...arr].sort((a, b) => {
         const getValue = (obj: Booking) => {
           switch (sortConfig.key) {
@@ -159,13 +167,7 @@ export default function ManagerBookings() {
             case "checkOut":
               return obj.checkOut ? new Date(obj.checkOut).getTime() : 0;
             case "crocusProfit":
-              return (
-                (obj.bruttoClient || 0) -
-                (obj.internalNet || 0) -
-                (obj.commission || 0) -
-                ((obj.commission || 0) / 0.9 - obj.commission) -
-                (obj.bankFeeAmount || 0)
-              );
+              return (obj.bruttoClient || 0) - (obj.internalNet || 0);
             default:
               const v = (obj as any)[sortConfig.key];
               return typeof v === "number" ? v : String(v).localeCompare("");
@@ -207,26 +209,15 @@ export default function ManagerBookings() {
     await deleteDoc(doc(db, "bookings", id));
   };
 
-  // Вычисляем итоги
+  // Итоги
   const sumBrutto = displayed.reduce((s, b) => s + (b.bruttoClient || 0), 0).toFixed(2);
-  const sumCommission = displayed.reduce((s, b) => s + (b.commission || 0), 0).toFixed(2);
-  const sumProfit = displayed
-    .reduce((s, b) => {
-      const profit =
-        (b.bruttoClient || 0) -
-        (b.internalNet || 0) -
-        (b.commission || 0) -
-        ((b.commission || 0) / 0.9 - b.commission) -
-        (b.bankFeeAmount || 0);
-      return s + profit;
-    }, 0)
-    .toFixed(2);
+  const sumInternal = displayed.reduce((s, b) => s + (b.internalNet || 0), 0).toFixed(2);
+  const sumCrocus = (parseFloat(sumBrutto) - parseFloat(sumInternal)).toFixed(2);
 
   return (
     <ManagerLayout>
       <Card className="w-full mx-auto mt-6">
         <CardContent className="p-6">
-          {/* Заголовок и экспорт */}
           <div className="flex justify-between items-center mb-4">
             <h1 className="text-2xl font-bold">{t("manager.title")}</h1>
             <DownloadTableExcel
@@ -239,13 +230,11 @@ export default function ManagerBookings() {
               </Button>
             </DownloadTableExcel>
           </div>
-
-          {/* Таблица */}
           <div className="overflow-x-auto">
-            <table ref={tableRef} className="min-w-[1400px] w-full border text-sm">
+            <table ref={tableRef} className="min-w-[1500px] w-full border text-sm">
               <thead className="bg-gray-100 text-center">
-                {/* Заголовки */}
                 <tr>
+                  <th className="px-2 py-1 border w-[120px]">Тип заявки</th>
                   <th className="px-2 py-1 border w-[100px] cursor-pointer" onClick={() => requestSort("date")}>
                     {t("date")}
                     <SortArrow colKey="date" />
@@ -278,24 +267,24 @@ export default function ManagerBookings() {
                     <SortArrow colKey="checkOut" />
                   </th>
                   <th
-                    className="px-2 py-1 border w-[100px] cursor-pointer text-right"
+                    className="px-2 py-1 border w-[100px] cursor-pointer text-center"
                     onClick={() => requestSort("bruttoClient")}
                   >
-                    {t("client")} (€)
+                    {t("Брутто Клиент")}
                     <SortArrow colKey="bruttoClient" />
                   </th>
                   <th
-                    className="px-2 py-1 border w-[100px] cursor-pointer text-right"
+                    className="px-2 py-1 border w-[100px] cursor-pointer text-center"
                     onClick={() => requestSort("commission")}
                   >
-                    {t("commission")} (€)
+                    {t("Нетто Реал")}
                     <SortArrow colKey="commission" />
                   </th>
                   <th
-                    className="px-2 py-1 border w-[100px] cursor-pointer text-right"
+                    className="px-2 py-1 border w-[100px] cursor-pointer text-center"
                     onClick={() => requestSort("crocusProfit")}
                   >
-                    {t("crocusProfit")} (€)
+                    {t("Комиссия Crocus")}
                     <SortArrow colKey="crocusProfit" />
                   </th>
                   <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("status")}>
@@ -306,8 +295,16 @@ export default function ManagerBookings() {
                   <th className="px-2 py-1 border w-[120px]">{t("vouchers")}</th>
                   <th className="px-2 py-1 border w-[100px]">{t("actions")}</th>
                 </tr>
-                {/* Фильтры */}
                 <tr className="bg-white text-center">
+                  
+                  <th className="px-1 py-0.5 border w-[80px]">
+                    <Input
+                      value={filters.bookingType}
+                      onChange={(e) => setFilters((f) => ({ ...f, bookingType: e.target.value }))}
+                      placeholder="Тип"
+                      className="h-8 w-full text-xs"
+                    />
+                  </th>
                   <th className="px-1 py-0.5 border w-[100px]">
                     <Input
                       type="date"
@@ -428,37 +425,53 @@ export default function ManagerBookings() {
                   <th className="w-[100px]" />
                 </tr>
               </thead>
-
               <tbody>
                 {displayed.map((b) => {
-                  const created = b.createdAt?.toDate ? format(b.createdAt.toDate(), "dd.MM.yyyy") : "-";
-                  const profit =
-                    ((b.bruttoClient || 0) -
-                      (b.internalNet || 0) -
-                      (b.commission || 0) -
-                      ((b.commission || 0) / 0.9 - b.commission) -
-                      (b.bankFeeAmount || 0))
-                      .toFixed(2);
+                  const created = b.createdAt?.toDate
+                    ? format(b.createdAt.toDate(), "dd.MM.yyyy")
+                    : "-";
+                  const profit = ((b.bruttoClient || 0) - (b.internalNet || 0)).toFixed(2);
+                  const typeLabel = TYPE_LABELS[b.bookingType || ""] || b.bookingType;
                   return (
                     <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
+                      <td className="px-2 py-1 border w-[120px]">{typeLabel}</td>
                       <td className="px-2 py-1 border w-[100px] whitespace-nowrap">{created}</td>
-                      <td className="px-2 py-1 border w-[80px] whitespace-nowrap">{b.bookingNumber || "—"}</td>
-                      <td className="px-2 py-1 border w-[200px] truncate">{b.agentName} ({b.agentAgency})</td>
+                      <td className="px-2 py-1 border w/[80px] whitespace-nowrap">{b.bookingNumber || "—"}</td>
+                      <td className="px-2 py-1 border w-[200px] truncate">
+                        {b.agentName} ({b.agentAgency})
+                      </td>
                       <td className="px-2 py-1 border w-[150px] truncate">{b.operator}</td>
                       <td className="px-2 py-1 border w-[400px] truncate text-center">{b.hotel}</td>
-                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">{b.checkIn ? format(new Date(b.checkIn), "dd.MM.yyyy") : "-"}</td>
-                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">{b.checkOut ? format(new Date(b.checkOut), "dd.MM.yyyy") : "-"}</td>
-                      <td className="px-2 py-1 border w-[100px] text-right">{(b.bruttoClient || 0).toFixed(2)}</td>
-                      <td className="px-2 py-1 border w-[100px] text-right">{(b.commission || 0).toFixed(2)}</td>
+                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
+                        {b.checkIn ? format(new Date(b.checkIn), "dd.MM.yyyy") : "-"}
+                      </td>
+                      <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
+                        {b.checkOut ? format(new Date(b.checkOut), "dd.MM.yyyy") : "-"}
+                      </td>
+                      <td className="px-2 py-1 border w-[100px] text-right">
+                        {(b.bruttoClient || 0).toFixed(2)}
+                      </td>
+                      <td className="px-2 py-1 border w-[100px] text-right">
+                        {(b.internalNet || 0).toFixed(2)}
+                      </td>
                       <td className="px-2 py-1 border w-[100px] text-right">{profit}</td>
                       <td className="px-2 py-1 border w-[120px]">
-                        <Badge className={`inline-flex px-2 py-1 text-xs rounded-sm ring-1 ring-inset ${STATUS_COLORS[b.status as any]}`}>
+                        <Badge
+                          className={`inline-flex px-2 py-1 text-xs rounded-sm ring-1 ring-inset ${
+                            STATUS_COLORS[b.status as any]
+                          }`}
+                        >
                           {t(`statuses.${b.status}`)}
                         </Badge>
                       </td>
                       <td className="px-2 py-1 border w-[100px]">
                         {b.invoiceLink ? (
-                          <a href={b.invoiceLink} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
+                          <a
+                            href={b.invoiceLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-indigo-600 hover:underline"
+                          >
                             {t("Open")}
                           </a>
                         ) : (
@@ -469,7 +482,12 @@ export default function ManagerBookings() {
                         {Array.isArray(b.voucherLinks) && b.voucherLinks.length
                           ? b.voucherLinks.map((l, i) => (
                               <div key={i}>
-                                <a href={l} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">
+                                <a
+                                  href={l}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-sky-600 hover:underline"
+                                >
                                   {t("Voucher")} {i + 1}
                                 </a>
                               </div>
@@ -478,10 +496,24 @@ export default function ManagerBookings() {
                       </td>
                       <td className="px-2 py-1 border w-[100px]">
                         <div className="flex gap-2 justify-center">
-                          <button title={t("edit")} className="text-xl hover:scale-110 transition" onClick={() => router.push(`/manager/${b.id}`)}>
+                          <button
+                            title={t("edit")}
+                            className="text-xl hover:scale-110 transition"
+                            onClick={() => {
+                              const path =
+                                b.bookingType === "olimpya_base"
+                                  ? `/olimpya/${b.id}`
+                                  : `/manager/${b.id}`;
+                              router.push(path);
+                            }}
+                          >
                             ✏️
                           </button>
-                          <button title={t("delete")} className="text-xl hover:scale-110 transition" onClick={() => delBooking(b.id, b.bookingNumber || "—")}>
+                          <button
+                            title={t("delete")}
+                            className="text-xl hover:scale-110 transition"
+                            onClick={() => delBooking(b.id!, b.bookingNumber || "—")}
+                          >
                             🗑️
                           </button>
                         </div>
@@ -490,18 +522,14 @@ export default function ManagerBookings() {
                   );
                 })}
               </tbody>
-
               <tfoot className="bg-gray-100 font-semibold">
                 <tr>
-                  {/* объединяем первые 7 колонок для заголовка «Итого» */}
-                  <td colSpan={7} className="px-2 py-2 text-right">
+                  <td colSpan={8} className="px-2 py-2 text-right">
                     {t("total")}
                   </td>
-                  {/* итоговые суммы */}
                   <td className="px-2 py-2 text-right">{sumBrutto}</td>
-                  <td className="px-2 py-2 text-right">{sumCommission}</td>
-                  <td className="px-2 py-2 text-right">{sumProfit}</td>
-                  {/* и последние 4 пустые */}
+                  <td className="px-2 py-2 text-right">{sumInternal}</td>
+                  <td className="px-2 py-2 text-right">{sumCrocus}</td>
                   <td />
                   <td />
                   <td />

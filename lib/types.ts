@@ -16,12 +16,14 @@ export interface Booking {
   checkIn?: string;
   checkOut?: string;
   bruttoClient?: number;
+  nettoFact?: number;
   commission?: number;
   internalNet?: number;
   bankFeeAmount?: number;
   status?: string;
   invoiceLink?: string;
   comment?: string;
+  bookingType?: string;
   voucherLinks?: string[];
   createdAt?: {
     toDate: () => Date;

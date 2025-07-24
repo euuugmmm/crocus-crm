@@ -1,5 +1,3 @@
-// components/BookingFormOlimpya.js
-
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import InputMask from "react-input-mask-next";
@@ -17,9 +15,19 @@ const OPERATORS = [
 ];
 
 const BASES = [
-  { label: "Игорь",    val: "igor"    },
-  { label: "Евгений",  val: "evgeniy" },
-  { label: "Crocus",   val: "crocus"  },
+  { label: "Игорь", val: "igor" },
+  { label: "Евгений", val: "evgeniy" },
+  { label: "Crocus", val: "crocus" },
+];
+
+const STATUS_OPTIONS = [
+  { label: "Новая", val: "new" },
+  { label: "Заведено DMC", val: "created_dmc" },
+  { label: "Заведено Toco", val: "created_toco" },
+  { label: "Подтверждено DMC + Авиа", val: "confirmed_dmc_flight" },
+  { label: "Подтверждено", val: "confirmed" },
+  { label: "Завершено", val: "finished" },
+  { label: "Отменено", val: "cancelled" },
 ];
 
 export default function BookingFormOlimpya({
@@ -45,8 +53,9 @@ export default function BookingFormOlimpya({
   const [mealPlan, setMealPlan] = useState("");
   const [bruttoClient, setBruttoClient] = useState("");
   const [nettoOlimpya, setNettoOlimpya] = useState("");
-  const [nettoFact, setNettoFact] = useState("");
+  const [internalNet, setinternalNet] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("card");
+  const [status, setStatus] = useState("created_dmc");
   const [comment, setComment] = useState("");
 
   const [tourists, setTourists] = useState([
@@ -54,20 +63,20 @@ export default function BookingFormOlimpya({
   ]);
 
   // расчёт комиссий
-  const [commissionO, setCommissionO]             = useState(0);
-  const [overCommission, setOverCommission]       = useState(0);
-  const [realCommission, setRealCommission]       = useState(0);
-  const [commissionIgor, setCommissionIgor]       = useState(0);
+  const [commissionO, setCommissionO] = useState(0);
+  const [overCommission, setOverCommission] = useState(0);
+  const [realCommission, setRealCommission] = useState(0);
+  const [commissionIgor, setCommissionIgor] = useState(0);
   const [commissionEvgeniy, setCommissionEvgeniy] = useState(0);
 
   useEffect(() => {
     const bc = parseFloat(bruttoClient) || 0;
-    const no = parseFloat(nettoOlimpya)   || 0;
-    const nf = parseFloat(nettoFact)      || 0;
+    const no = parseFloat(nettoOlimpya) || 0;
+    const nf = parseFloat(internalNet) || 0;
 
-    const O    = bc - no;             // основная комиссия
-    const real = bc - nf;             // реальная комиссия
-    const over = no - nf;             // оверкомиссия
+    const O = bc - no; // основная комиссия
+    const real = bc - nf; // реальная комиссия
+    const over = no - nf; // оверкомиссия
 
     let ig = 0, ev = 0;
     if (base === "igor") {
@@ -87,7 +96,7 @@ export default function BookingFormOlimpya({
     setRealCommission(rnd(real));
     setCommissionIgor(rnd(ig));
     setCommissionEvgeniy(rnd(ev));
-  }, [bruttoClient, nettoOlimpya, nettoFact, base]);
+  }, [bruttoClient, nettoOlimpya, internalNet, base]);
 
   const opInfo = OPERATORS.find(o => o.val === operator);
 
@@ -103,7 +112,7 @@ export default function BookingFormOlimpya({
 
   // туристы
   const addTourist = () =>
-    setTourists(prev => [...prev, { name:"", dob:"", passportNumber:"", passportValidUntil:"", nationality:"", hasEUDoc:false }]);
+    setTourists(prev => [...prev, { name: "", dob: "", passportNumber: "", passportValidUntil: "", nationality: "", hasEUDoc: false }]);
   const removeTourist = i =>
     setTourists(prev => prev.filter((_, idx) => idx !== i));
   const updateTourist = (i, field, val) =>
@@ -114,7 +123,8 @@ export default function BookingFormOlimpya({
     e.preventDefault();
     await onSubmit({
       bookingNumber,
-      baseType        : base,
+      bookingType: "olimpya_base",
+      baseType: base,
       operator,
       region,
       departureCity,
@@ -126,11 +136,12 @@ export default function BookingFormOlimpya({
       checkOut,
       room,
       mealPlan,
-      tourists        : tourists.filter(t => t.name.trim()),
-      bruttoClient    : parseFloat(bruttoClient) || 0,
-      nettoOlimpya    : parseFloat(nettoOlimpya)   || 0,
-      nettoFact       : parseFloat(nettoFact)      || 0,
+      tourists: tourists.filter(t => t.name.trim()),
+      bruttoClient: parseFloat(bruttoClient) || 0,
+      nettoOlimpya: parseFloat(nettoOlimpya) || 0,
+      internalNet: parseFloat(internalNet) || 0,
       paymentMethod,
+      status,
       commissionO,
       overCommission,
       realCommission,
@@ -293,8 +304,8 @@ export default function BookingFormOlimpya({
         <label className="block font-medium">Netto Fact</label>
         <input
           type="number"
-          value={nettoFact}
-          onChange={e => setNettoFact(e.target.value)}
+          value={internalNet}
+          onChange={e => setinternalNet(e.target.value)}
           className="w-full border rounded p-2"
         />
       </div>
@@ -308,8 +319,10 @@ export default function BookingFormOlimpya({
           <option value="card">Карта</option>
           <option value="iban">IBAN</option>
           <option value="crypto">Crypto</option>
+          <option value="cash">Cash</option>
         </select>
       </div>
+
 
       {/* расчёт комиссий */}
       <div className="p-3 bg-gray-50 border rounded text-sm space-y-1">
