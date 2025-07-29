@@ -10,7 +10,7 @@ import {
   deleteDoc,
   doc,
 } from "firebase/firestore";
-import { format, parse, isValid } from "date-fns"
+import { format, parse, isValid, parseISO } from "date-fns";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -76,7 +76,7 @@ const STATUS_OPTIONS = [
   { label: "Ожидает оплату", val: "awaiting_payment" },
   { label: "Оплачено", val: "paid" },
   { label: "Ожидает подтверждения", val: "awaiting_confirm" },
-    { label: "Подтверждено DMC", val: "confirmed_dmc" },
+  { label: "Подтверждено DMC", val: "confirmed_dmc" },
   { label: "Подтверждено DMC + Авиа", val: "confirmed_dmc_flight" },
   { label: "Подтверждено", val: "confirmed" },
   { label: "Завершено", val: "finished" },
@@ -143,58 +143,72 @@ export default function ManagerBookings() {
     return () => unsub();
   }, [loading, user, isManager, isSuperManager, isAdmin, router]);
 
-
-  const parseDate = (s: string) => (s ? new Date(s + "T00:00:00") : null);
-
   const displayed = React.useMemo(() => {
-    let arr = bookings.filter((b) => {
-      const created = b.createdAt?.toDate();
-      if (filters.dateFrom && (!created || created < parseDate(filters.dateFrom)!)) return false;
-      if (filters.dateTo && (!created || created > parseDate(filters.dateTo)!)) return false;
+    const createdFrom  = filters.dateFrom   ? parseISO(filters.dateFrom)   : null;
+    const createdTo    = filters.dateTo     ? parseISO(filters.dateTo)     : null;
+    const checkInFrom  = filters.checkInFrom  ? parseISO(filters.checkInFrom)  : null;
+    const checkInTo    = filters.checkInTo    ? parseISO(filters.checkInTo)    : null;
+    const checkOutFrom = filters.checkOutFrom ? parseISO(filters.checkOutFrom) : null;
+    const checkOutTo   = filters.checkOutTo   ? parseISO(filters.checkOutTo)   : null;
 
-      const ci = b.checkIn ? new Date(b.checkIn) : null;
-      if (filters.checkInFrom && (!ci || ci < parseDate(filters.checkInFrom)!)) return false;
-      if (filters.checkInTo && (!ci || ci > parseDate(filters.checkInTo)!)) return false;
+    return bookings
+      .filter((b) => {
+        // createdAt filter
+        const created = b.createdAt?.toDate() ?? null;
+        if (createdFrom && (!created || created < createdFrom)) return false;
+        if (createdTo   && (!created || created > createdTo))   return false;
 
-      const co = b.checkOut ? new Date(b.checkOut) : null;
-      if (filters.checkOutFrom && (!co || co < parseDate(filters.checkOutFrom)!)) return false;
-      if (filters.checkOutTo && (!co || co > parseDate(filters.checkOutTo)!)) return false;
+        // checkIn filter
+        const ci = parseDateString(b.checkIn);
+        if (checkInFrom && (!ci || ci < checkInFrom)) return false;
+        if (checkInTo   && (!ci || ci > checkInTo))   return false;
 
-      if (!b.bookingNumber?.toLowerCase().includes(filters.bookingNumber.toLowerCase())) return false;
-      if (!b.agentName?.toLowerCase().includes(filters.agentName.toLowerCase())) return false;
-      if (!b.operator?.toLowerCase().includes(filters.operator.toLowerCase())) return false;
-      if (!b.hotel?.toLowerCase().includes(filters.hotel.toLowerCase())) return false;
+        // checkOut filter
+        const co = parseDateString(b.checkOut);
+        if (checkOutFrom && (!co || co < checkOutFrom)) return false;
+        if (checkOutTo   && (!co || co > checkOutTo))   return false;
 
-      if (filters.bruttoClient && (b.bruttoClient || 0).toFixed(2) !== filters.bruttoClient) return false;
-      if (filters.commission && (b.commission || 0).toFixed(2) !== filters.commission) return false;
+        // text filters
+        if (!b.bookingNumber?.toLowerCase().includes(filters.bookingNumber.toLowerCase())) return false;
+        if (!b.agentName     .toLowerCase().includes(filters.agentName    .toLowerCase()))    return false;
+        if (!b.operator      .toLowerCase().includes(filters.operator     .toLowerCase()))     return false;
+        if (!b.hotel         .toLowerCase().includes(filters.hotel        .toLowerCase()))        return false;
 
-      if (filters.crocusProfit) {
-        const profit = (b.bruttoClient || 0) - (b.internalNet || 0);
-        if (profit.toFixed(2) !== filters.crocusProfit) return false;
-      }
+        // numeric filters
+        if (filters.bruttoClient && (b.bruttoClient || 0).toFixed(2) !== filters.bruttoClient) return false;
+        if (filters.commission   && (b.commission   || 0).toFixed(2) !== filters.commission)   return false;
+        if (filters.crocusProfit) {
+          const profit = (b.bruttoClient || 0) - (b.internalNet || 0);
+          if (profit.toFixed(2) !== filters.crocusProfit) return false;
+        }
 
-      if (filters.status !== "all" && b.status !== filters.status) return false;
-      return true;
-      if (filters.bookingType && !TYPE_LABELS[b.bookingType]?.toLowerCase().includes(filters.bookingType.toLowerCase())) 
-  return false;
-    });
+        // status & type filters
+        if (filters.status !== "all" && b.status !== filters.status) return false;
+        if (
+          filters.bookingType &&
+          !TYPE_LABELS[b.bookingType]?.toLowerCase().includes(filters.bookingType.toLowerCase())
+        ) return false;
 
-    if (!sortConfig) {
-      arr = [...arr].sort((a, b) => {
-        const aTime = a.createdAt?.toDate().getTime() || 0;
-        const bTime = b.createdAt?.toDate().getTime() || 0;
-        return bTime - aTime;
-      });
-    } else {
-      arr = [...arr].sort((a, b) => {
+        return true;
+      })
+      .sort((a, b) => {
+        if (!sortConfig) {
+          const aT = a.createdAt?.toDate().getTime() || 0;
+          const bT = b.createdAt?.toDate().getTime() || 0;
+          return bT - aT;
+        }
         const getValue = (obj: Booking) => {
           switch (sortConfig.key) {
             case "date":
               return obj.createdAt?.toDate().getTime() || 0;
-            case "checkIn":
-              return obj.checkIn ? new Date(obj.checkIn).getTime() : 0;
-            case "checkOut":
-              return obj.checkOut ? new Date(obj.checkOut).getTime() : 0;
+            case "checkIn": {
+              const d = parseDateString(obj.checkIn);
+              return d ? d.getTime() : 0;
+            }
+            case "checkOut": {
+              const d = parseDateString(obj.checkOut);
+              return d ? d.getTime() : 0;
+            }
             case "crocusProfit":
               return (obj.bruttoClient || 0) - (obj.internalNet || 0);
             default:
@@ -203,14 +217,11 @@ export default function ManagerBookings() {
           }
         };
         const aVal = getValue(a),
-          bVal = getValue(b);
+              bVal = getValue(b);
         if (aVal < bVal) return sortConfig.direction === "asc" ? -1 : 1;
         if (aVal > bVal) return sortConfig.direction === "asc" ? 1 : -1;
         return 0;
       });
-    }
-
-    return arr;
   }, [bookings, filters, sortConfig]);
 
   function requestSort(key: string) {
@@ -239,9 +250,9 @@ export default function ManagerBookings() {
   };
 
   // Итоги
-  const sumBrutto = displayed.reduce((s, b) => s + (b.bruttoClient || 0), 0).toFixed(2);
-  const sumInternal = displayed.reduce((s, b) => s + (b.internalNet || 0), 0).toFixed(2);
-  const sumCrocus = (parseFloat(sumBrutto) - parseFloat(sumInternal)).toFixed(2);
+  const sumBrutto   = displayed.reduce((s, b) => s + (b.bruttoClient || 0), 0).toFixed(2);
+  const sumInternal = displayed.reduce((s, b) => s + (b.internalNet   || 0), 0).toFixed(2);
+  const sumCrocus   = (parseFloat(sumBrutto) - parseFloat(sumInternal)).toFixed(2);
 
   return (
     <ManagerLayout>
@@ -453,39 +464,33 @@ export default function ManagerBookings() {
                   <th className="w-[120px]" />
                   <th className="w-[100px]" />
                 </tr>
-              </thead>
+               </thead>
               <tbody>
-                  {displayed.map((b) => {
+                {displayed.map((b) => {
                   const createdStr = format(b.createdAt!.toDate(), "dd.MM.yyyy");
-                  const checkInDate = parseDateString(b.checkIn);
+                  const checkInDate  = parseDateString(b.checkIn);
                   const checkOutDate = parseDateString(b.checkOut);
-
-
-                    
                   const profit = ((b.bruttoClient || 0) - (b.internalNet || 0)).toFixed(2);
                   const typeLabel = TYPE_LABELS[b.bookingType || ""] || b.bookingType;
+
                   return (
                     <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
                       <td className="px-2 py-1 border w-[120px]">{typeLabel}</td>
                       <td className="px-2 py-1 border w-[100px] whitespace-nowrap">{createdStr}</td>
-                      <td className="px-2 py-1 border w/[80px] whitespace-nowrap">{b.bookingNumber || "—"}</td>
+                      <td className="px-2 py-1 border w-[80px] whitespace-nowrap">{b.bookingNumber || "—"}</td>
                       <td className="px-2 py-1 border w-[200px] truncate">
                         {b.agentName} ({b.agentAgency})
                       </td>
                       <td className="px-2 py-1 border w-[150px] truncate">{b.operator}</td>
                       <td className="px-2 py-1 border w-[400px] truncate text-center">{b.hotel}</td>
                       <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
-                        {checkInDate ? format(checkInDate, "dd.MM.yyyy") : "-"}
+                        {checkInDate  ? format(checkInDate, "dd.MM.yyyy") : "-"}
                       </td>
                       <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
                         {checkOutDate ? format(checkOutDate, "dd.MM.yyyy") : "-"}
                       </td>
-                      <td className="px-2 py-1 border w-[100px] text-right">
-                        {(b.bruttoClient || 0).toFixed(2)}
-                      </td>
-                      <td className="px-2 py-1 border w-[100px] text-right">
-                        {(b.internalNet || 0).toFixed(2)}
-                      </td>
+                      <td className="px-2 py-1 border w-[100px] text-right">{(b.bruttoClient || 0).toFixed(2)}</td>
+                      <td className="px-2 py-1 border w-[100px] text-right">{(b.internalNet   || 0).toFixed(2)}</td>
                       <td className="px-2 py-1 border w-[100px] text-right">{profit}</td>
                       <td className="px-2 py-1 border w-[120px]">
                         <Badge
@@ -495,6 +500,7 @@ export default function ManagerBookings() {
                         >
                           {t(`statuses.${b.status}`)}
                         </Badge>
+
                       </td>
                       <td className="px-2 py-1 border w-[100px]">
                         {b.invoiceLink ? (
