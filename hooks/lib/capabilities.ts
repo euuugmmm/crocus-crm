@@ -1,24 +1,50 @@
-// hooks/useCapabilities.ts
-import { useAuth } from "@/context/AuthContext";
-import { ROLE_CAPS, type Capability } from "@/lib/capabilities";
+// capabilities.ts
+export type Capability =
+  | "booking.view"
+  | "booking.create"
+  | "booking.edit"
+  | "booking.delete"
+  | "comment.create"
+  | "comment.moderate"
+  | "payout.view"
+  | "payout.edit";
 
-export function useCapabilities() {
-  const { isAgent, isOlimpya, isManager, isSuperManager, isAdmin } = useAuth();
+type Role = "agent" | "olimpya_agent" | "manager" | "supermanager" | "admin";
 
-  // Выбираем массив прав в зависимости от роли
-  const caps = new Set<Capability>(
-    isAdmin
-      ? ROLE_CAPS.admin
-      : isSuperManager
-      ? ROLE_CAPS.supermanager
-      : isManager
-      ? ROLE_CAPS.manager
-      : isOlimpya
-      ? ROLE_CAPS.olimpya_agent
-      : ROLE_CAPS.agent
-  );
-
-  const can = (c: Capability) => caps.has(c);
-
-  return { caps, can };
-}
+export const ROLE_CAPS: Record<Role, Capability[]> = {
+  agent: [
+    "booking.view",
+    "booking.create",
+    "comment.create",
+  ],
+  olimpya_agent: [
+    "booking.view",
+    "booking.create",
+    "comment.create",
+  ],
+  manager: [
+    "booking.view",
+    "booking.edit",
+    "comment.create",
+    "comment.moderate",
+    "payout.view",
+  ],
+  supermanager: [
+    "booking.view",
+    "booking.edit",
+    "booking.delete",
+    "comment.create",
+    "comment.moderate",
+    "payout.view",
+    "payout.edit",
+  ],
+  admin: [
+    "booking.view",
+    "booking.edit",
+    "booking.delete",
+    "comment.create",
+    "comment.moderate",
+    "payout.view",
+    "payout.edit",
+  ],
+};
