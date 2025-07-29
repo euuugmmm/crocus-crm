@@ -20,5 +20,8 @@
     "jsx": "preserve"
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "components/BookingFormManager.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js"],
-  "exclude": ["node_modules"]
+    "exclude": [
+    "node_modules",
+    "functions" 
+  ]
 }
