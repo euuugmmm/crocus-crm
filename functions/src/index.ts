@@ -2,6 +2,7 @@
 import { setGlobalOptions, logger } from "firebase-functions/v2";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { initializeApp } from "firebase-admin/app";
+
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 
 // ───────────────────────────────────────────────────────────
