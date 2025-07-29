@@ -75,6 +75,7 @@ const STATUS_OPTIONS = [
   { label: "Новая", val: "new" },
   { label: "Заведено DMC", val: "created_dmc" },
   { label: "Заведено Toco", val: "created_toco" },
+  { label: "Подтверждено DMC", val: "confirmed_dmc" },
   { label: "Подтверждено DMC + Авиа", val: "confirmed_dmc_flight" },
   { label: "Подтверждено", val: "confirmed" },
   { label: "Завершено", val: "finished" },

@@ -10,7 +10,7 @@ import {
   deleteDoc,
   doc,
 } from "firebase/firestore";
-import { format } from "date-fns";
+import { format, parse, isValid } from "date-fns"
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -38,25 +38,50 @@ export async function getServerSideProps({ locale }: { locale: string }) {
   };
 }
 
+// ─── Расширяем перечень ключей статусов ───
 const STATUS_KEYS = [
   "new",
+  "created_dmc",
+  "created_toco",
   "awaiting_payment",
   "paid",
   "awaiting_confirm",
+  "confirmed_dmc",
+  "confirmed_dmc_flight",
   "confirmed",
   "finished",
   "cancelled",
 ] as const;
 
+// ─── Цвета под каждый ключ ───
 const STATUS_COLORS: Record<typeof STATUS_KEYS[number], string> = {
   new: "bg-yellow-50 text-yellow-800 ring-yellow-600/20",
+  created_dmc: "bg-indigo-50 text-indigo-700 ring-indigo-600/20",
+  created_toco: "bg-blue-50 text-blue-700 ring-blue-600/20",
   awaiting_payment: "bg-orange-50 text-orange-700 ring-orange-600/20",
-  paid: "bg-blue-50 text-blue-700 ring-blue-700/10",
-  awaiting_confirm: "bg-purple-50 text-purple-700 ring-purple-700/10",
+  paid: "bg-blue-100 text-blue-800 ring-blue-600/10",
+  awaiting_confirm: "bg-purple-50 text-purple-700 ring-purple-600/20",
+  confirmed_dmc: "bg-purple-100 text-purple-800 ring-purple-600/10",
+  confirmed_dmc_flight: "bg-purple-100 text-purple-800 ring-purple-600/10",
   confirmed: "bg-green-50 text-green-700 ring-green-600/20",
   finished: "bg-green-700 text-white ring-green-800/30",
   cancelled: "bg-red-50 text-red-700 ring-red-600/10",
 };
+
+// ─── Опции для селекта статусов ───
+const STATUS_OPTIONS = [
+  { label: "Новая", val: "new" },
+  { label: "Заведено DMC", val: "created_dmc" },
+  { label: "Заведено Toco", val: "created_toco" },
+  { label: "Ожидает оплату", val: "awaiting_payment" },
+  { label: "Оплачено", val: "paid" },
+  { label: "Ожидает подтверждения", val: "awaiting_confirm" },
+    { label: "Подтверждено DMC", val: "confirmed_dmc" },
+  { label: "Подтверждено DMC + Авиа", val: "confirmed_dmc_flight" },
+  { label: "Подтверждено", val: "confirmed" },
+  { label: "Завершено", val: "finished" },
+  { label: "Отменено", val: "cancelled" },
+];
 
 // Mapping bookingType values to human-readable labels
 const TYPE_LABELS: Record<string, string> = {
@@ -65,10 +90,17 @@ const TYPE_LABELS: Record<string, string> = {
   romania: "Румыния",
 };
 
+// parse a dd.MM.yyyy string into a JS Date, or null if invalid
+function parseDateString(str?: string): Date | null {
+  if (!str) return null;
+  const dt = parse(str, "dd.MM.yyyy", new Date());
+  return isValid(dt) ? dt : null;
+}
+
 export default function ManagerBookings() {
   const router = useRouter();
   const { t } = useTranslation("common");
-  const { user, isManager } = useAuth();
+  const { user, loading, isManager, isSuperManager, isAdmin } = useAuth();
   const tableRef = useRef<HTMLTableElement | null>(null);
 
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -89,31 +121,28 @@ export default function ManagerBookings() {
     crocusProfit: "",
     status: "all",
   });
-  const [sortConfig, setSortConfig] = useState<{
-    key: string;
-    direction: "asc" | "desc";
-  } | null>(null);
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
 
   useEffect(() => {
-    if (!user || !isManager) {
-      router.push("/login");
+    if (!router.isReady) return;
+    if (loading) return;
+    if (!user || (!isManager && !isSuperManager && !isAdmin)) {
+      router.replace("/login");
       return;
     }
     const q = query(collection(db, "bookings"));
     const unsub = onSnapshot(q, (snap) => {
       setBookings(
-        snap.docs.map((d) => {
-          const data = d.data() as Booking;
-          return {
-            id: d.id,
-            bookingType: data.bookingType,
-            ...data,
-          };
-        })
+        snap.docs.map((d) => ({
+          id: d.id,
+          bookingType: d.data().bookingType,
+          ...(d.data() as Booking),
+        }))
       );
     });
     return () => unsub();
-  }, [user, isManager, router]);
+  }, [loading, user, isManager, isSuperManager, isAdmin, router]);
+
 
   const parseDate = (s: string) => (s ? new Date(s + "T00:00:00") : null);
 
@@ -426,16 +455,19 @@ export default function ManagerBookings() {
                 </tr>
               </thead>
               <tbody>
-                {displayed.map((b) => {
-                  const created = b.createdAt?.toDate
-                    ? format(b.createdAt.toDate(), "dd.MM.yyyy")
-                    : "-";
+                  {displayed.map((b) => {
+                  const createdStr = format(b.createdAt!.toDate(), "dd.MM.yyyy");
+                  const checkInDate = parseDateString(b.checkIn);
+                  const checkOutDate = parseDateString(b.checkOut);
+
+
+                    
                   const profit = ((b.bruttoClient || 0) - (b.internalNet || 0)).toFixed(2);
                   const typeLabel = TYPE_LABELS[b.bookingType || ""] || b.bookingType;
                   return (
                     <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
                       <td className="px-2 py-1 border w-[120px]">{typeLabel}</td>
-                      <td className="px-2 py-1 border w-[100px] whitespace-nowrap">{created}</td>
+                      <td className="px-2 py-1 border w-[100px] whitespace-nowrap">{createdStr}</td>
                       <td className="px-2 py-1 border w/[80px] whitespace-nowrap">{b.bookingNumber || "—"}</td>
                       <td className="px-2 py-1 border w-[200px] truncate">
                         {b.agentName} ({b.agentAgency})
@@ -443,10 +475,10 @@ export default function ManagerBookings() {
                       <td className="px-2 py-1 border w-[150px] truncate">{b.operator}</td>
                       <td className="px-2 py-1 border w-[400px] truncate text-center">{b.hotel}</td>
                       <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
-                        {b.checkIn ? format(new Date(b.checkIn), "dd.MM.yyyy") : "-"}
+                        {checkInDate ? format(checkInDate, "dd.MM.yyyy") : "-"}
                       </td>
                       <td className="px-2 py-1 border w-[120px] whitespace-nowrap">
-                        {b.checkOut ? format(new Date(b.checkOut), "dd.MM.yyyy") : "-"}
+                        {checkOutDate ? format(checkOutDate, "dd.MM.yyyy") : "-"}
                       </td>
                       <td className="px-2 py-1 border w-[100px] text-right">
                         {(b.bruttoClient || 0).toFixed(2)}

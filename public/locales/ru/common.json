@@ -193,6 +193,13 @@
   "olimpyaNetPayout": "К выплате (после налога)",
   "payoutType": "Тип выплаты",
   "payoutIndividual": "Физ. лицо (-10 %)",
+  "statuses.created_dmc": "Заведено DMC",
+  "statuses.created_toco": "Заведено Toco",
+  "statuses.awaiting_payment": "Ожидает оплату",
+  "statuses.paid": "Оплачено",
+  "statuses.awaiting_confirm": "Ожидает подтверждения",
+  "statuses.confirmed_dmc": "Подтверждено DMC",
+  "statuses.confirmed_dmc_flight": "Подтверждено DMC + Авиа",
   "payoutCompany": "Компания (-24 %)"
 
   

@@ -309,19 +309,7 @@ export default function BookingFormOlimpya({
           className="w-full border rounded p-2"
         />
       </div>
-      <div>
-        <label className="block font-medium">Способ оплаты</label>
-        <select
-          className="w-full border rounded p-2"
-          value={paymentMethod}
-          onChange={e => setPaymentMethod(e.target.value)}
-        >
-          <option value="card">Карта</option>
-          <option value="iban">IBAN</option>
-          <option value="crypto">Crypto</option>
-          <option value="cash">Cash</option>
-        </select>
-      </div>
+     
 
 
       {/* расчёт комиссий */}

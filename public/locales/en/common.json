@@ -193,5 +193,12 @@
   "olimpyaNetPayout": "To be paid (after tax)",
   "payoutType": "Payout Type",
   "payoutIndividual": "Individual (-10%)",
+  "statuses.created_dmc": "Created in DMC",
+  "statuses.created_toco": "Created in Toco",
+  "statuses.awaiting_payment": "Awaiting Payment",
+  "statuses.paid": "Paid",
+  "statuses.awaiting_confirm": "Awaiting Confirmation",
+  "statuses.confirmed_dmc": "Confirmed DMC",
+  "statuses.confirmed_dmc_flight": "Confirmed DMC + Flight",
   "payoutCompany": "Company (-24%)"
 }
