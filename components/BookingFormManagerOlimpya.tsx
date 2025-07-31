@@ -3,8 +3,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useTranslation } from "next-i18next";
 import InputMask from "react-input-mask-next";
-import { format, parse, isValid } from "date-fns";      // ⬅️ parse + isValid
-
+import { format, parse, isValid } from "date-fns";
 
 export interface Tourist {
   name: string;
@@ -13,6 +12,7 @@ export interface Tourist {
   passportValidUntil: string;
   nationality: string;
   hasEUDoc: boolean;
+  phone?: string; // опционально — чтобы не рушить типы при добавлении пустого телефона
 }
 
 export interface OlimpyaBookingValues {
@@ -41,6 +41,7 @@ export interface OlimpyaBookingValues {
   realCommission?: number;
   commissionIgor?: number;
   commissionEvgeniy?: number;
+  commission?: number; // ✅ новое поле — пишем в базу
   comment?: string;
   agentName?: string;
   agentAgency?: string;
@@ -92,7 +93,7 @@ export default function BookingFormManagerOlimpya({
   const { t } = useTranslation("common");
 
   // form state
-  const [base, setBase] = useState<"igor"|"evgeniy"|"crocus">("igor");
+  const [base, setBase] = useState<"igor" | "evgeniy" | "crocus">("igor");
   const [operator, setOperator] = useState("");
   const [region, setRegion] = useState("");
   const [departureCity, setDepartureCity] = useState("");
@@ -112,7 +113,14 @@ export default function BookingFormManagerOlimpya({
   const [comment, setComment] = useState("");
 
   const [tourists, setTourists] = useState<Tourist[]>([
-    { name: "", dob: "", passportNumber: "", passportValidUntil: "", nationality: "", hasEUDoc: false },
+    {
+      name: "",
+      dob: "",
+      passportNumber: "",
+      passportValidUntil: "",
+      nationality: "",
+      hasEUDoc: false,
+    },
   ]);
 
   // commission fields
@@ -121,6 +129,7 @@ export default function BookingFormManagerOlimpya({
   const [realCommission, setRealCommission] = useState(0);
   const [commissionIgor, setCommissionIgor] = useState(0);
   const [commissionEvgeniy, setCommissionEvgeniy] = useState(0);
+  const [commission, setCommission] = useState(0); // ✅ итоговая комиссия (после -10%)
 
   // init
   useEffect(() => {
@@ -146,8 +155,21 @@ export default function BookingFormManagerOlimpya({
     setTourists(
       Array.isArray(initialValues.tourists) && initialValues.tourists.length
         ? initialValues.tourists
-        : [{ name: "", dob: "", passportNumber: "", passportValidUntil: "", nationality: "", hasEUDoc: false }]
+        : [
+            {
+              name: "",
+              dob: "",
+              passportNumber: "",
+              passportValidUntil: "",
+              nationality: "",
+              hasEUDoc: false,
+            },
+          ]
     );
+    // если пришла готовая комиссия — можно проставить, но дальше она будет пересчитана useEffect-ом
+    if (typeof initialValues.commission === "number") {
+      setCommission(initialValues.commission);
+    }
   }, [initialValues]);
 
   // recalc commissions
@@ -155,10 +177,13 @@ export default function BookingFormManagerOlimpya({
     const bc = parseFloat(bruttoClient) || 0;
     const no = parseFloat(nettoOlimpya) || 0;
     const nf = parseFloat(internalNet) || 0;
-    const O = bc - no;
-    const real = bc - nf;
-    const over = no - nf;
-    let ig = 0, ev = 0;
+
+    const O = bc - no;        // комиссия «Олимпия» до перерасчётов
+    const real = bc - nf;     // реальная комиссия
+    const over = no - nf;     // оверкомиссия
+
+    let ig = 0,
+      ev = 0;
     if (base === "igor") {
       ig = O + Math.max(0, over) * 0.30;
       ev = Math.max(0, over) * 0.70;
@@ -169,23 +194,29 @@ export default function BookingFormManagerOlimpya({
       ig = real * 0.5;
       ev = real * 0.5;
     }
+
     const rnd = (x: number) => Math.round(x * 100) / 100;
+
+    const realR = rnd(real);
     setCommissionO(rnd(O));
     setOverCommission(rnd(over));
-    setRealCommission(rnd(real));
+    setRealCommission(realR);
     setCommissionIgor(rnd(ig));
     setCommissionEvgeniy(rnd(ev));
-  }, [bruttoClient, nettoOlimpya, internalNet, base]);
 
+    // ✅ commission = realCommission - 10% = 90% от real
+    setCommission(rnd(realR * 0.9));
+  }, [bruttoClient, nettoOlimpya, internalNet, base]);
 
   /* ───────── helpers ───────── */
   const parseDMY = (s: string) => {
-    /** пытаемся DD.MM.YYYY, иначе отдаём native */
+    // пытаемся DD.MM.YYYY, иначе отдаём native
     const p = parse(s, "dd.MM.yyyy", new Date());
     return isValid(p) ? p : new Date(s);
   };
   const age = (dob: string) => {
-    const b = parseDMY(dob), n = new Date();
+    const b = parseDMY(dob),
+      n = new Date();
     let a = n.getFullYear() - b.getFullYear();
     if (n < new Date(b.setFullYear(b.getFullYear() + a))) a--;
     return a;
@@ -195,23 +226,33 @@ export default function BookingFormManagerOlimpya({
     const parsed = parseDMY(d);
     return isValid(parsed) ? format(parsed, "dd.MM.yyyy") : "—";
   };
-  
 
   const renderMaskedInput = (value: string, setter: (v: string) => void) => (
     <InputMask
       mask="99.99.9999"
       value={value}
-      onChange={e => setter(e.target.value)}
+      onChange={(e) => setter(e.target.value)}
       className="w-full border rounded p-2"
       placeholder="дд.мм.гггг"
     />
   );
 
   const addTourist = () =>
-    setTourists(t=>[...t,{ name:"",dob:"",passportNumber:"",passportValidUntil:"",nationality:"",hasEUDoc:false,phone:"" }]);
-  const delTourist = (idx:number) => setTourists(t=>t.filter((_,i)=>i!==idx));
-  const chTourist  = (idx:number,f:keyof Tourist,v:any) =>
-    setTourists(t=>t.map((tr,i)=>i===idx?{ ...tr,[f]:v }:tr));
+    setTourists((t) => [
+      ...t,
+      {
+        name: "",
+        dob: "",
+        passportNumber: "",
+        passportValidUntil: "",
+        nationality: "",
+        hasEUDoc: false,
+        phone: "",
+      },
+    ]);
+  const delTourist = (idx: number) => setTourists((t) => t.filter((_, i) => i !== idx));
+  const chTourist = (idx: number, f: keyof Tourist, v: any) =>
+    setTourists((t) => t.map((tr, i) => (i === idx ? { ...tr, [f]: v } : tr)));
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -241,6 +282,7 @@ export default function BookingFormManagerOlimpya({
       realCommission,
       commissionIgor,
       commissionEvgeniy,
+      commission, // ✅ пишем рассчитанную «commission = real * 0.9»
       comment,
       agentName,
       agentAgency,
@@ -253,74 +295,101 @@ export default function BookingFormManagerOlimpya({
       <div className="p-4 bg-gray-100 rounded-lg border space-y-4">
         <h2 className="text-lg font-semibold">Информация о заявке</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-          <p><strong>Агент:</strong> {agentName}</p>
-          <p><strong>Агентство:</strong> {agentAgency}</p>
-          <p><strong>Номер заявки:</strong> {bookingNumber}</p>
-          <p><strong>Оператор:</strong> {operator}</p>
-          <p><strong>Направление:</strong> {region}</p>
-          <p><strong>Город вылета:</strong> {departureCity}</p>
-          <p><strong>Город прилёта:</strong> {arrivalCity}</p>
-          <p><strong>Отель:</strong> {hotel}</p>
-          <p><strong>Период:</strong> {checkIn} → {checkOut}</p>
-          <p><strong>Комната:</strong> {room}</p>
-          <p><strong>Brutto клиента:</strong> {bruttoClient} €</p>
-          <p><strong>Netto Олимпия:</strong> {nettoOlimpya} €</p>
-          <p><strong>Netto Fact:</strong> {internalNet} €</p>
-          <p><strong>Питание:</strong> {mealPlan}</p>
+          <p>
+            <strong>Агент:</strong> {agentName}
+          </p>
+          <p>
+            <strong>Агентство:</strong> {agentAgency}
+          </p>
+          <p>
+            <strong>Номер заявки:</strong> {bookingNumber}
+          </p>
+          <p>
+            <strong>Оператор:</strong> {operator}
+          </p>
+          <p>
+            <strong>Направление:</strong> {region}
+          </p>
+          <p>
+            <strong>Город вылета:</strong> {departureCity}
+          </p>
+          <p>
+            <strong>Город прилёта:</strong> {arrivalCity}
+          </p>
+          <p>
+            <strong>Отель:</strong> {hotel}
+          </p>
+          <p>
+            <strong>Период:</strong> {checkIn} → {checkOut}
+          </p>
+          <p>
+            <strong>Комната:</strong> {room}
+          </p>
+          <p>
+            <strong>Brutto клиента:</strong> {bruttoClient} €
+          </p>
+          <p>
+            <strong>Netto Олимпия:</strong> {nettoOlimpya} €
+          </p>
+          <p>
+            <strong>Netto Fact:</strong> {internalNet} €
+          </p>
+          <p>
+            <strong>Питание:</strong> {mealPlan}
+          </p>
           <div className="col-span-full overflow-x-auto">
-  <strong>Туристы:</strong>
-  <div
-    className="
-      mt-2 grid gap-4 whitespace-nowrap
-      grid-cols-[minmax(250px,_auto)_max-content_max-content_max-content_max-content_max-content_max-content]
-    "
-  >
-    {/* ФИО */}
-    <div>
-      <p className="sr-only">ФИО</p>
-      {tourists.map((t, i) => (
-        <p key={i}>{t.name}</p>
-      ))}
-    </div>
-    {/* Возраст */}
-    <div>
-      <p className="sr-only">Возраст</p>
-      {tourists.map((t, i) => (
-        <p key={i}>{age(t.dob)}</p>
-      ))}
-    </div>
-    {/* Дата рождения */}
-    <div>
-      <p className="sr-only">Дата рождения</p>
-      {tourists.map((t, i) => (
-        <p key={i}>{fmt(t.dob)}</p>
-      ))}
-    </div>
-    {/* Гражданство */}
-    <div>
-      <p className="sr-only">Гражданство</p>
-      {tourists.map((t, i) => (
-        <p key={i}>{t.nationality}</p>
-      ))}
-    </div>
-    {/* Паспорт № */}
-    <div>
-      <p className="sr-only">Паспорт №</p>
-      {tourists.map((t, i) => (
-        <p key={i}>{t.passportNumber}</p>
-      ))}
-    </div>
-    {/* Действителен до */}
-    <div>
-      <p className="sr-only">Действителен до</p>
-      {tourists.map((t, i) => (
-        <p key={i}>{fmt(t.passportValidUntil)}</p>
-      ))}
-    </div>
-    {/* Телефон (только первый) */}
-    
-  </div>
-</div>
+            <strong>Туристы:</strong>
+            <div
+              className="
+                mt-2 grid gap-4 whitespace-nowrap
+                grid-cols-[minmax(250px,_auto)_max-content_max-content_max-content_max-content_max-content_max-content]
+              "
+            >
+              {/* ФИО */}
+              <div>
+                <p className="sr-only">ФИО</p>
+                {tourists.map((t, i) => (
+                  <p key={i}>{t.name}</p>
+                ))}
+              </div>
+              {/* Возраст */}
+              <div>
+                <p className="sr-only">Возраст</p>
+                {tourists.map((t, i) => (
+                  <p key={i}>{age(t.dob)}</p>
+                ))}
+              </div>
+              {/* Дата рождения */}
+              <div>
+                <p className="sr-only">Дата рождения</p>
+                {tourists.map((t, i) => (
+                  <p key={i}>{fmt(t.dob)}</p>
+                ))}
+              </div>
+              {/* Гражданство */}
+              <div>
+                <p className="sr-only">Гражданство</p>
+                {tourists.map((t, i) => (
+                  <p key={i}>{t.nationality}</p>
+                ))}
+              </div>
+              {/* Паспорт № */}
+              <div>
+                <p className="sr-only">Паспорт №</p>
+                {tourists.map((t, i) => (
+                  <p key={i}>{t.passportNumber}</p>
+                ))}
+              </div>
+              {/* Действителен до */}
+              <div>
+                <p className="sr-only">Действителен до</p>
+                {tourists.map((t, i) => (
+                  <p key={i}>{fmt(t.passportValidUntil)}</p>
+                ))}
+              </div>
+              {/* Телефон (опционально — при необходимости вывести) */}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -331,11 +400,13 @@ export default function BookingFormManagerOlimpya({
           <select
             className="w-full border rounded p-2"
             value={base}
-            onChange={e => setBase(e.target.value as any)}
+            onChange={(e) => setBase(e.target.value as any)}
             required
           >
-            {BASES.map(b => (
-              <option key={b.val} value={b.val}>{b.label}</option>
+            {BASES.map((b) => (
+              <option key={b.val} value={b.val}>
+                {b.label}
+              </option>
             ))}
           </select>
         </div>
@@ -344,12 +415,14 @@ export default function BookingFormManagerOlimpya({
           <select
             className="w-full border rounded p-2"
             value={operator}
-            onChange={e => setOperator(e.target.value)}
+            onChange={(e) => setOperator(e.target.value)}
             required
           >
             <option value="">— выберите —</option>
-            {OPERATORS.map(o => (
-              <option key={o.val} value={o.val}>{o.label}</option>
+            {OPERATORS.map((o) => (
+              <option key={o.val} value={o.val}>
+                {o.label}
+              </option>
             ))}
           </select>
         </div>
@@ -362,7 +435,7 @@ export default function BookingFormManagerOlimpya({
           <input
             className="w-full border rounded p-2"
             value={region}
-            onChange={e => setRegion(e.target.value)}
+            onChange={(e) => setRegion(e.target.value)}
             required
           />
         </div>
@@ -371,7 +444,7 @@ export default function BookingFormManagerOlimpya({
           <input
             className="w-full border rounded p-2"
             value={hotel}
-            onChange={e => setHotel(e.target.value)}
+            onChange={(e) => setHotel(e.target.value)}
             required
           />
         </div>
@@ -384,7 +457,7 @@ export default function BookingFormManagerOlimpya({
           <input
             className="w-full border rounded p-2"
             value={departureCity}
-            onChange={e => setDepartureCity(e.target.value)}
+            onChange={(e) => setDepartureCity(e.target.value)}
           />
         </div>
         <div>
@@ -392,7 +465,7 @@ export default function BookingFormManagerOlimpya({
           <input
             className="w-full border rounded p-2"
             value={arrivalCity}
-            onChange={e => setArrivalCity(e.target.value)}
+            onChange={(e) => setArrivalCity(e.target.value)}
           />
         </div>
         <div>
@@ -400,7 +473,7 @@ export default function BookingFormManagerOlimpya({
           <input
             className="w-full border rounded p-2"
             value={flightNumber}
-            onChange={e => setFlightNumber(e.target.value)}
+            onChange={(e) => setFlightNumber(e.target.value)}
           />
         </div>
       </div>
@@ -422,42 +495,56 @@ export default function BookingFormManagerOlimpya({
       {tourists.map((t, i) => (
         <div key={i} className="relative border p-4 rounded-lg bg-white mb-4 shadow-sm">
           {tourists.length > 1 && (
-            <button type="button" onClick={() => delTourist(i)} className="absolute top-2 right-2 text-red-500">🗑</button>
+            <button
+              type="button"
+              onClick={() => delTourist(i)}
+              className="absolute top-2 right-2 text-red-500"
+            >
+              🗑
+            </button>
           )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <input
               placeholder="ФИО"
               required
               value={t.name}
-              onChange={e => chTourist(i, "name", e.target.value)}
+              onChange={(e) => chTourist(i, "name", e.target.value)}
               className="border rounded p-2"
             />
-            {renderMaskedInput(t.dob, v => chTourist(i,"dob",v), )}
+            {renderMaskedInput(t.dob, (v) => chTourist(i, "dob", v))}
             <input
               placeholder="Паспорт №"
               value={t.passportNumber}
-              onChange={e => chTourist(i, "passportNumber", e.target.value)}
+              onChange={(e) => chTourist(i, "passportNumber", e.target.value)}
               className="border rounded p-2"
             />
-            {renderMaskedInput(t.passportValidUntil, v => chTourist(i,"passportValidUntil",v))}
+            {renderMaskedInput(t.passportValidUntil, (v) =>
+              chTourist(i, "passportValidUntil", v)
+            )}
             <input
               placeholder="Гражданство"
               value={t.nationality}
-              onChange={e => chTourist(i, "nationality", e.target.value)}
+              onChange={(e) => chTourist(i, "nationality", e.target.value)}
               className="border rounded p-2"
             />
             <label className="flex items-center space-x-2">
               <input
                 type="checkbox"
                 checked={t.hasEUDoc}
-                onChange={e => chTourist(i, "hasEUDoc", e.target.checked)}
+                onChange={(e) => chTourist(i, "hasEUDoc", e.target.checked)}
               />
               <span>EU-документ</span>
             </label>
           </div>
         </div>
       ))}
-      <button type="button" onClick={addTourist} className="text-blue-600 text-sm">+ Добавить туриста</button>
+      <button
+        type="button"
+        onClick={addTourist}
+        className="text-blue-600 text-sm"
+      >
+        + Добавить туриста
+      </button>
 
       {/* ───── Финансовые данные ───── */}
       <h3 className="text-lg font-semibold mt-4">Финансовые данные</h3>
@@ -469,7 +556,7 @@ export default function BookingFormManagerOlimpya({
             step="0.01"
             className="w-full border rounded p-2"
             value={bruttoClient}
-            onChange={e => setBruttoClient(e.target.value)}
+            onChange={(e) => setBruttoClient(e.target.value)}
             required
           />
         </div>
@@ -480,7 +567,7 @@ export default function BookingFormManagerOlimpya({
             step="0.01"
             className="w-full border rounded p-2"
             value={nettoOlimpya}
-            onChange={e => setNettoOlimpya(e.target.value)}
+            onChange={(e) => setNettoOlimpya(e.target.value)}
           />
         </div>
       </div>
@@ -491,10 +578,9 @@ export default function BookingFormManagerOlimpya({
           step="0.01"
           className="w-full border rounded p-2"
           value={internalNet}
-          onChange={e => setinternalNet(e.target.value)}
+          onChange={(e) => setinternalNet(e.target.value)}
         />
       </div>
-      
 
       {/* ───── Статус ───── */}
       <div>
@@ -502,9 +588,9 @@ export default function BookingFormManagerOlimpya({
         <select
           className="w-full border rounded p-2"
           value={status}
-          onChange={e => setStatus(e.target.value)}
+          onChange={(e) => setStatus(e.target.value)}
         >
-          {STATUS_OPTIONS.map(s => (
+          {STATUS_OPTIONS.map((s) => (
             <option key={s.val} value={s.val}>
               {s.label}
             </option>
@@ -514,11 +600,24 @@ export default function BookingFormManagerOlimpya({
 
       {/* ───── Комиссии ───── */}
       <div className="p-3 bg-gray-50 border rounded text-sm space-y-1">
-        <p><strong>Комиссия Олимпия (O):</strong> {commissionO} €</p>
-        <p><strong>Оверкомиссия:</strong> {overCommission} €</p>
-        <p><strong>Комиссия реальная:</strong> {realCommission} €</p>
-        <p><strong>Игорю:</strong> {commissionIgor} €</p>
-        <p><strong>Евгению:</strong> {commissionEvgeniy} €</p>
+        <p>
+          <strong>Комиссия Олимпия (O):</strong> {commissionO} €
+        </p>
+        <p>
+          <strong>Оверкомиссия:</strong> {overCommission} €
+        </p>
+        <p>
+          <strong>Комиссия реальная:</strong> {realCommission} €
+        </p>
+        <p>
+          <strong>Игорю:</strong> {commissionIgor} €
+        </p>
+        <p>
+          <strong>Евгению:</strong> {commissionEvgeniy} €
+        </p>
+        <p>
+          <strong>Комиссия (после -10%):</strong> {commission} € {/* ✅ для контроля */}
+        </p>
       </div>
 
       {/* ───── Комментарий ───── */}
@@ -527,18 +626,19 @@ export default function BookingFormManagerOlimpya({
         <textarea
           className="w-full border rounded p-2"
           value={comment}
-          onChange={e => setComment(e.target.value)}
+          onChange={(e) => setComment(e.target.value)}
         />
       </div>
 
       {/* ───── Кнопки ───── */}
       <div className="flex justify-between mt-4">
-        <button type="submit"
+        <button
+          type="submit"
           className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
         >
           {initialValues ? "Сохранить" : "Создать"}
         </button>
-        
+
         <button
           type="button"
           className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
@@ -546,7 +646,6 @@ export default function BookingFormManagerOlimpya({
         >
           Отмена
         </button>
-
       </div>
     </form>
   );

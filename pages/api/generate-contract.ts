@@ -124,7 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 7) Сохраняем в Firestore
     await db.doc(`users/${userId}`).set({
-      lastContract: { number: contractNumber, link: link },
+      lastContract: { number: contractNumber, link: link, date: date },
       contractLinks: FieldValue.arrayUnion(link),
       hasSignedContract: false,
     }, { merge: true });

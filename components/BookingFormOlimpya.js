@@ -54,7 +54,7 @@ export default function BookingFormOlimpya({
   const [bruttoClient, setBruttoClient] = useState("");
   const [nettoOlimpya, setNettoOlimpya] = useState("");
   const [internalNet, setinternalNet] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("card");
+  const [paymentMethod, setPaymentMethod] = useState("iban");
   const [status, setStatus] = useState("created_dmc");
   const [comment, setComment] = useState("");
 
@@ -68,6 +68,7 @@ export default function BookingFormOlimpya({
   const [realCommission, setRealCommission] = useState(0);
   const [commissionIgor, setCommissionIgor] = useState(0);
   const [commissionEvgeniy, setCommissionEvgeniy] = useState(0);
+  const [commissionPaid, setcommissionPaid] = useState("false");
 
   useEffect(() => {
     const bc = parseFloat(bruttoClient) || 0;
@@ -147,6 +148,7 @@ export default function BookingFormOlimpya({
       realCommission,
       commissionIgor,
       commissionEvgeniy,
+      commissionPaid,
       comment,
     });
     router.push("/olimpya/bookings");
