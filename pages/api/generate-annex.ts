@@ -261,7 +261,7 @@ const bookings: any[] = bookingSnaps.map(s => ({ id: s.id, ...s.data() }));
 
     // 9) загрузка DOCX
     const up = await drive.files.create({
-      requestBody: { name: `Annexa-${annexNumber}.docx`, parents: [folderId] },
+      requestBody: { name: `Anexa-${annexNumber}.docx`, parents: [folderId] },
       media: {
         mimeType:
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

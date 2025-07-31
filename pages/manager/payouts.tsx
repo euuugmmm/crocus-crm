@@ -572,7 +572,7 @@ export default function ManagerPayoutsPage() {
                 <th className="px-2 py-1 border">Агент</th>
                 <th className="px-2 py-1 border text-right">Сумма (€)</th>
                 <th className="px-2 py-1 border">Комментарий</th>
-                <th className="px-2 py-1 border">Annex</th>
+                <th className="px-2 py-1 border">Anexa</th>
                 <th className="px-2 py-1 border">Действия</th>
               </tr>
             </thead>
@@ -584,7 +584,14 @@ export default function ManagerPayoutsPage() {
                       ? format(p.createdAt.toDate(), "dd.MM.yyyy")
                       : "—"}
                   </td>
-                  <td className="px-2 py-1 border">{p.agentName}</td>
+                 <td className="px-2 py-1 border">
+   {(() => {
+    const ag = agents.find(a => a.id === p.agentId);
+    return ag 
+      ? `${ag.agencyName} — ${ag.agentName}` 
+      : "—";
+  })()}
+</td>
                   <td className="px-2 py-1 border text-right">
                     {p.amount?.toFixed(2) || "—"}
                   </td>
@@ -596,7 +603,7 @@ export default function ManagerPayoutsPage() {
                         target="_blank"
                         className="underline text-sky-600"
                       >
-                        PDF
+                        FILE
                       </a>
                     ) : (
                       <Button size="sm" variant="outline" onClick={() => handleAnnex(p.id)}>

@@ -124,12 +124,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 7) Сохраняем в Firestore
     await db.doc(`users/${userId}`).set({
-      lastContract: { number: contractNumber, link: link, date: date },
+      agentName: name,
+      lastContract: { number: contractNumber, link: link, date: date, name: name, address: address, cnp: cnp, passport: passport },
       contractLinks: FieldValue.arrayUnion(link),
       hasSignedContract: false,
     }, { merge: true });
 
-    res.status(200).json({ link, contractNumber, date });
+    res.status(200).json({ link, contractNumber, date, name, address, cnp, passport });
   } catch (e: any) {
     console.error("Contract gen error:", e);
     res.status(500).json({ error: "Generation failed", details: e.message });
