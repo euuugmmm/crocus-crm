@@ -1,38 +1,51 @@
 // pages/agent/bookings.tsx
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import Link from "next/link";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
-import { format } from "date-fns";
-
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/context/AuthContext";
+import AgentLayout from "@/components/layouts/AgentLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useTranslation } from "next-i18next";
 import { serverSideTranslations } from "next-i18next/serverSideTranslations";
-import AgentLayout from "@/components/layouts/AgentLayout";
+import { STATUS_COLORS, STATUS_KEYS, StatusKey } from "@/lib/constants/statuses";
+import { fmtDate, toDate } from "@/lib/utils/dates";
+import { fixed2, toNumber } from "@/lib/utils/numbers";
 
 export async function getServerSideProps({ locale }: { locale: string }) {
-  return {
-    props: {
-      ...(await serverSideTranslations(locale, ["common"])),
-    },
-  };
+  return { props: { ...(await serverSideTranslations(locale, ["common"])) } };
 }
 
-const statusMap: Record<string, string> = {
+type Booking = {
+  id?: string;
+  bookingType?: string;
+  createdAt?: any;
+  bookingNumber?: string;
+  agentName?: string;
+  agentAgency?: string;
+  operator?: string;
+  hotel?: string;
+  checkIn?: string | Date | null;
+  checkOut?: string | Date | null;
+  bruttoClient?: number | string;
+  internalNet?: number | string;
+  nettoFact?: number | string;
+  commission?: number | string;
+  realCommission?: number | string;
+  tourists?: Array<{ name?: string }>;
+  status?: StatusKey | string;
+  invoiceLink?: string;
+  voucherLinks?: string[];
+};
+
+// Нормализация «старых» текстовых статусов в ключи
+const LEGACY_STATUS: Record<string, StatusKey> = {
   "Новая": "new",
   "Ожидание оплаты": "awaiting_payment",
   "Оплачено туристом": "paid",
@@ -42,170 +55,365 @@ const statusMap: Record<string, string> = {
   "Отменен": "cancelled",
 };
 
-const statusColors: Record<string, string> = {
-  new: "bg-yellow-50 text-yellow-800 ring-yellow-600/20",
-  awaiting_payment: "bg-orange-50 text-orange-700 ring-orange-600/20",
-  paid: "bg-blue-50 text-blue-700 ring-blue-700/10",
-  awaiting_confirm: "bg-purple-50 text-purple-700 ring-purple-700/10",
-  confirmed: "bg-green-50 text-green-700 ring-green-600/20",
-  finished: "bg-green-700 text-white ring-green-800/30",
-  cancelled: "bg-red-50 text-red-700 ring-red-600/10",
-};
-
 export default function AgentBookingsPage() {
-  const { t } = useTranslation("common");
   const router = useRouter();
+  const { t } = useTranslation("common");
   const { user, isAgent } = useAuth();
+  const tableRef = useRef<HTMLTableElement | null>(null);
 
-  const [bookings, setBookings] = useState<any[]>([]);
-  const [filters, setFilters] = useState({ number: "", operator: "", hotel: "", status: "all" });
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [filters, setFilters] = useState({
+    dateFrom: "",
+    dateTo: "",
+    bookingNumber: "",
+    operator: "",
+    hotel: "",
+    checkInFrom: "",
+    checkInTo: "",
+    checkOutFrom: "",
+    checkOutTo: "",
+    firstTourist: "",
+    bruttoClient: "",
+    nettoFact: "",
+    realCommission: "",
+    status: "all",
+  });
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: "asc" | "desc" } | null>({
+    key: "createdAt",
+    direction: "desc",
+  });
 
   useEffect(() => {
     if (!user || !isAgent) return;
     const q = query(collection(db, "bookings"), where("agentId", "==", user.uid));
-    const off = onSnapshot(q, (snap) => {
+    const unsub = onSnapshot(q, (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-      list.sort((a, b) => {
-        const nA = parseInt((a.bookingNumber || "").replace(/\D/g, ""), 10) || 0;
-        const nB = parseInt((b.bookingNumber || "").replace(/\D/g, ""), 10) || 0;
-        return nB - nA;
-      });
-      setBookings(list);
+      setBookings(list as Booking[]);
     });
-    return () => off();
+    return () => unsub();
   }, [user, isAgent]);
 
-  const filtered = bookings.filter((b) => {
-    const normalizedStatus = statusMap[b.status] || b.status || "unknown";
-    const st = filters.status === "all" || normalizedStatus === filters.status;
-    const num = (b.bookingNumber || "").toLowerCase().includes(filters.number.toLowerCase());
-    const op = (b.operator || "").toLowerCase().includes(filters.operator.toLowerCase());
-    const hot = (b.hotel || "").toLowerCase().includes(filters.hotel.toLowerCase());
-    return st && num && op && hot;
-  });
+  const displayed = useMemo(() => {
+    const parseDate = (s: string) => (s ? new Date(s + "T00:00:00") : null);
 
-  const totalBr = filtered.reduce((s, b) => s + (b.bruttoClient || 0), 0);
-  const totalCm = filtered.reduce((s, b) => s + (b.commission || 0), 0);
-  const smallInp = "h-8 px-1 text-sm";
+    const filtered = bookings.filter((b) => {
+      const created = toDate(b.createdAt);
+      const df = filters.dateFrom ? parseDate(filters.dateFrom) : null;
+      const dt = filters.dateTo ? parseDate(filters.dateTo) : null;
+      if (df && (!created || created < df)) return false;
+      if (dt && (!created || created > dt)) return false;
+
+      if (filters.bookingNumber && !b.bookingNumber?.toLowerCase().includes(filters.bookingNumber.toLowerCase()))
+        return false;
+      if (filters.operator && !b.operator?.toLowerCase().includes(filters.operator.toLowerCase())) return false;
+      if (filters.hotel && !b.hotel?.toLowerCase().includes(filters.hotel.toLowerCase())) return false;
+
+      const ci = toDate(b.checkIn);
+      const cif = filters.checkInFrom ? parseDate(filters.checkInFrom) : null;
+      const cit = filters.checkInTo ? parseDate(filters.checkInTo) : null;
+      if (cif && (!ci || ci < cif)) return false;
+      if (cit && (!ci || ci > cit)) return false;
+
+      const co = toDate(b.checkOut);
+      const cof = filters.checkOutFrom ? parseDate(filters.checkOutFrom) : null;
+      const cot = filters.checkOutTo ? parseDate(filters.checkOutTo) : null;
+      if (cof && (!co || co < cof)) return false;
+      if (cot && (!co || co > cot)) return false;
+
+      if (filters.firstTourist && !b.tourists?.[0]?.name?.toLowerCase().includes(filters.firstTourist.toLowerCase()))
+        return false;
+
+      if (filters.bruttoClient && fixed2(b.bruttoClient) !== fixed2(filters.bruttoClient)) return false;
+
+      // Netto Fact: берём из nettoFact или internalNet
+      const netFact = b.nettoFact ?? b.internalNet;
+      if (filters.nettoFact && fixed2(netFact) !== fixed2(filters.nettoFact)) return false;
+
+      // Real Commission: берём из realCommission или commission
+      const realComm = b.realCommission ?? b.commission;
+      if (filters.realCommission && fixed2(realComm) !== fixed2(filters.realCommission)) return false;
+
+      const statusKey: StatusKey = LEGACY_STATUS[b.status as string] || (b.status as StatusKey) || "new";
+      if (filters.status !== "all" && statusKey !== (filters.status as any)) return false;
+
+      return true;
+    });
+
+    const arr = [...filtered];
+    const { key, direction } = sortConfig!;
+    arr.sort((a, b) => {
+      let aV: any, bV: any;
+      switch (key) {
+        case "createdAt":
+          aV = toDate(a.createdAt)?.getTime() || 0;
+          bV = toDate(b.createdAt)?.getTime() || 0;
+          break;
+        case "bookingNumber":
+          aV = parseInt(a.bookingNumber?.replace(/\D/g, "") || "0", 10);
+          bV = parseInt(b.bookingNumber?.replace(/\D/g, "") || "0", 10);
+          break;
+        case "operator":
+          aV = a.operator || "";
+          bV = b.operator || "";
+          break;
+        case "hotel":
+          aV = a.hotel || "";
+          bV = b.hotel || "";
+          break;
+        case "checkIn":
+          aV = toDate(a.checkIn)?.getTime() || 0;
+          bV = toDate(b.checkIn)?.getTime() || 0;
+          break;
+        case "checkOut":
+          aV = toDate(a.checkOut)?.getTime() || 0;
+          bV = toDate(b.checkOut)?.getTime() || 0;
+          break;
+        case "firstTourist":
+          aV = a.tourists?.[0]?.name || "";
+          bV = b.tourists?.[0]?.name || "";
+          break;
+        case "bruttoClient":
+          aV = toNumber(a.bruttoClient);
+          bV = toNumber(b.bruttoClient);
+          break;
+        case "nettoFact": {
+          const aN = a.nettoFact ?? a.internalNet;
+          const bN = b.nettoFact ?? b.internalNet;
+          aV = toNumber(aN);
+          bV = toNumber(bN);
+          break;
+        }
+        case "realCommission": {
+          const aR = a.realCommission ?? a.commission;
+          const bR = b.realCommission ?? b.commission;
+          aV = toNumber(aR);
+          bV = toNumber(bR);
+          break;
+        }
+        case "status": {
+          const aS = LEGACY_STATUS[a.status as string] || (a.status as string) || "";
+          const bS = LEGACY_STATUS[b.status as string] || (b.status as string) || "";
+          aV = aS;
+          bV = bS;
+          break;
+        }
+        default:
+          aV = "";
+          bV = "";
+      }
+      if (typeof aV === "string" && typeof bV === "string") {
+        return direction === "asc" ? aV.localeCompare(bV) : bV.localeCompare(aV);
+      }
+      return direction === "asc" ? aV - bV : bV - aV;
+    });
+    return arr;
+  }, [bookings, filters, sortConfig]);
+
+  function requestSort(key: string) {
+    setSortConfig((prev) => {
+      if (prev?.key === key) return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
+      return { key, direction: "asc" };
+    });
+  }
+
+  const SortArrow = ({ colKey }: { colKey: string }) =>
+    sortConfig?.key === colKey ? (sortConfig.direction === "asc" ? " ↑" : " ↓") : "";
+
+  const totalBr = displayed.reduce((s, b) => s + toNumber(b.bruttoClient), 0);
+  const totalNet = displayed.reduce((s, b) => s + toNumber(b.nettoFact ?? b.internalNet), 0);
+  const totalReal = displayed.reduce((s, b) => s + toNumber(b.realCommission ?? b.commission), 0);
 
   return (
     <AgentLayout>
-      <div className="w-full px-4 mt-6">
-        <div className="flex justify-between items-center mb-4">
-          <h1 className="text-2xl font-bold">{t("myBookings")}</h1>
-          <Button
-            className="bg-green-600 hover:bg-green-700"
-            onClick={() => router.push("/agent/new-booking")}
-          >
-            + {t("newBooking")}
-          </Button>
-        </div>
+      <Card className="w-full mx-auto mt-6">
+        <CardContent className="p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h1 className="text-2xl font-bold">{t("myBookings")}</h1>
+            <Button className="bg-green-600 hover:bg-green-700" onClick={() => router.push("/agent/new-booking")}>
+              + {t("newBooking")}
+            </Button>
+          </div>
 
-        <div className="overflow-x-auto w-full">
-          <table className="w-full text-sm border table-auto">
-            <thead className="bg-gray-100 text-center">
-              <tr>
-                <th className="px-2 py-1 w-28">{t("number")}</th>
-                <th className="px-2 py-1 w-32">{t("created")}</th>
-                <th className="px-2 py-1">{t("operator")}</th>
-                <th className="px-2 py-1">{t("hotel")}</th>
-                <th className="px-2 py-1">{t("checkIn")}</th>
-                <th className="px-2 py-1">{t("checkOut")}</th>
-                <th className="px-2 py-1 w-40">{t("client")} (€)</th>
-                <th className="px-2 py-1 w-40">{t("commission")} (€)</th>
-                <th className="px-2 py-1">{t("status")}</th>
-                <th className="px-2 py-1">{t("invoice")}</th>
-                <th className="px-2 py-1">{t("vouchers")}</th>
-                <th className="px-2 py-1">{t("comment")}</th>
-              </tr>
-              <tr className="bg-white border-b text-center">
-                <td>
-                  <Input className={smallInp} placeholder="#" value={filters.number} onChange={(e) => setFilters({ ...filters, number: e.target.value })} />
-                </td>
-                <td></td>
-                <td>
-                  <Input className={smallInp} placeholder={t("filter")} value={filters.operator} onChange={(e) => setFilters({ ...filters, operator: e.target.value })} />
-                </td>
-                <td>
-                  <Input className={smallInp} placeholder={t("filter")} value={filters.hotel} onChange={(e) => setFilters({ ...filters, hotel: e.target.value })} />
-                </td>
-                <td></td><td></td><td></td><td></td>
-                <td>
-                  <Select value={filters.status} onValueChange={(v) => setFilters({ ...filters, status: v })}>
-                    <SelectTrigger className="w-32 h-8">
-                      <SelectValue placeholder="Status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">{t("all")}</SelectItem>
-                      {Object.keys(statusColors).map((k) => (
-                        <SelectItem key={k} value={k}>
-                          {t(`statuses.${k}`)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </td>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((b) => {
-                const normalizedStatus = statusMap[b.status] || b.status || "unknown";
-                return (
-                  <tr key={b.id} className="border-t text-center hover:bg-gray-50">
-                    <td className="px-2 py-1 font-medium whitespace-nowrap">{b.bookingNumber || b.bookingCode || "—"}</td>
-                    <td className="px-2 py-1">{b.createdAt?.toDate ? format(b.createdAt.toDate(), "dd.MM.yyyy") : "-"}</td>
-                    <td className="px-2 py-1">{b.operator}</td>
-                    <td className="px-2 py-1">{b.hotel}</td>
-                    <td className="px-2 py-1">{b.checkIn && !isNaN(new Date(b.checkIn).getTime())
-                        ? format(new Date(b.checkIn), "dd.MM.yyyy")
-                             : "-"}
-                    </td>
-                      <td className="px-2 py-1">
-                        {b.checkOut && !isNaN(new Date(b.checkOut).getTime())
-                         ? format(new Date(b.checkOut), "dd.MM.yyyy")
-                        : "-"}
-                        </td>
-                    <td className="px-2 py-1 text-center">{(b.bruttoClient || 0).toFixed(2)}</td>
-                    <td className="px-2 py-1 text-center">{(b.commission || 0).toFixed(2)}</td>
-                    <td className="px-2 py-1">
-                      <Badge className={`inline-flex justify-center items-center min-w-[110px] text-center px-2 py-1 text-xs font-medium ring-1 ring-inset rounded-sm ${statusColors[normalizedStatus] || "bg-gray-100 text-gray-800"}`}>
-                        {t(`statuses.${normalizedStatus}`)}
-                      </Badge>
-                    </td>
-                    <td className="px-2 py-1">
-                      {b.invoiceLink ? (
-                        <a href={b.invoiceLink} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Open</a>
-                      ) : "—"}
-                    </td>
-                    <td className="px-2 py-1 min-w-[110px]">
-                      {Array.isArray(b.voucherLinks) && b.voucherLinks.length
-                        ? b.voucherLinks.map((l, i) => (
-                            <div key={i}>
-                              <a href={l} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">
-                                Voucher {i + 1}
-                              </a>
-                            </div>
-                          ))
-                        : "—"}
-                    </td>
-                    <td className="px-2 py-1">
-                      <button title={t("edit")} className="text-xl hover:scale-110 transition" onClick={() => router.push(`/agent/${b.id}`)}>✏️</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot className="bg-gray-100 font-semibold text-center">
-              <tr>
-                <td colSpan={6} className="px-2 py-2 text-right">{t("total")}:</td>
-                <td className="px-2 py-2 text-center">{totalBr.toFixed(2)} €</td>
-                <td className="px-2 py-2 text-center">{totalCm.toFixed(2)} €</td>
-                <td colSpan={5}></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
+          <div className="overflow-x-auto">
+            <table ref={tableRef} className="min-w-[1500px] w-full border table-auto text-sm">
+              <thead className="bg-gray-100 text-center">
+                <tr>
+                  <th className="px-2 py-1 border w-[100px] cursor-pointer" onClick={() => requestSort("createdAt")}>
+                    {t("created")}
+                    <SortArrow colKey="createdAt" />
+                  </th>
+                  <th className="px-2 py-1 border w-[80px] cursor-pointer" onClick={() => requestSort("bookingNumber")}>
+                    №
+                    <SortArrow colKey="bookingNumber" />
+                  </th>
+                  <th className="px-2 py-1 border w-[150px] cursor-pointer" onClick={() => requestSort("operator")}>
+                    {t("operator")}
+                    <SortArrow colKey="operator" />
+                  </th>
+                  <th className="px-2 py-1 border w-[400px] cursor-pointer" onClick={() => requestSort("hotel")}>
+                    {t("hotel")}
+                    <SortArrow colKey="hotel" />
+                  </th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("checkIn")}>
+                    {t("checkIn")}
+                    <SortArrow colKey="checkIn" />
+                  </th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("checkOut")}>
+                    {t("checkOut")}
+                    <SortArrow colKey="checkOut" />
+                  </th>
+                  <th className="px-2 py-1 border w-[200px] cursor-pointer" onClick={() => requestSort("firstTourist")}>
+                    {t("touristName") || "Имя туриста"}
+                    <SortArrow colKey="firstTourist" />
+                  </th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer text-right" onClick={() => requestSort("bruttoClient")}>
+                    {t("client")} (€)
+                    <SortArrow colKey="bruttoClient" />
+                  </th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer text-right" onClick={() => requestSort("nettoFact")}>
+                    Netto Fact (€)
+                    <SortArrow colKey="nettoFact" />
+                  </th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer text-right" onClick={() => requestSort("realCommission")}>
+                    Real комис. (€)
+                    <SortArrow colKey="realCommission" />
+                  </th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("status")}>
+                    {t("status")}
+                    <SortArrow colKey="status" />
+                  </th>
+                  <th className="px-2 py-1 border w-[100px]">{t("invoice")}</th>
+                  <th className="px-2 py-1 border w-[120px]">{t("vouchers")}</th>
+                  <th className="px-2 py-1 border w-[80px]">{t("actions")}</th>
+                </tr>
+
+                {/* Фильтры */}
+                <tr className="bg-white border-b text-center">
+                  <th className="px-1 py-0.5 border w-[100px]">
+                    <Input type="date" value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} className="mb-1 h-6 w-full text-xs" />
+                    <Input type="date" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} className="h-6 w-full text-xs" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input placeholder="#" value={filters.bookingNumber} onChange={(e) => setFilters((f) => ({ ...f, bookingNumber: e.target.value }))} className="h-8 w-full text-xs" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input placeholder={t("filter")} value={filters.operator} onChange={(e) => setFilters((f) => ({ ...f, operator: e.target.value }))} className="h-8 w-full text-xs" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input placeholder={t("filter")} value={filters.hotel} onChange={(e) => setFilters((f) => ({ ...f, hotel: e.target.value }))} className="h-8 w-full text-xs" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input type="date" value={filters.checkInFrom} onChange={(e) => setFilters((f) => ({ ...f, checkInFrom: e.target.value }))} className="mb-1 h-6 w-full text-xs" />
+                    <Input type="date" value={filters.checkInTo} onChange={(e) => setFilters((f) => ({ ...f, checkInTo: e.target.value }))} className="h-6 w-full text-xs" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input type="date" value={filters.checkOutFrom} onChange={(e) => setFilters((f) => ({ ...f, checkOutFrom: e.target.value }))} className="mb-1 h-6 w-full text-xs" />
+                    <Input type="date" value={filters.checkOutTo} onChange={(e) => setFilters((f) => ({ ...f, checkOutTo: e.target.value }))} className="h-6 w-full text-xs" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input placeholder={t("touristName") || "Имя"} value={filters.firstTourist} onChange={(e) => setFilters((f) => ({ ...f, firstTourist: e.target.value }))} className="h-8 w-full text-xs" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input placeholder="0.00" value={filters.bruttoClient} onChange={(e) => setFilters((f) => ({ ...f, bruttoClient: e.target.value }))} className="h-8 w-full text-xs text-right" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input placeholder="0.00" value={filters.nettoFact} onChange={(e) => setFilters((f) => ({ ...f, nettoFact: e.target.value }))} className="h-8 w-full text-xs text-right" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Input placeholder="0.00" value={filters.realCommission} onChange={(e) => setFilters((f) => ({ ...f, realCommission: e.target.value }))} className="h-8 w-full text-xs text-right" />
+                  </th>
+                  <th className="px-1 py-0.5 border">
+                    <Select value={filters.status} onValueChange={(v) => setFilters((f) => ({ ...f, status: v }))}>
+                      <SelectTrigger className="w-full h-8 text-xs">
+                        <SelectValue placeholder={t("statusFilter.all")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">{t("statusFilter.all")}</SelectItem>
+                        {STATUS_KEYS.map((key) => (
+                          <SelectItem key={key} value={key}>
+                            {t(`statuses.${key}`)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </th>
+                  <th className="w-[100px]" />
+                  <th className="w-[120px]" />
+                  <th className="w-[80px]" />
+                </tr>
+              </thead>
+
+              <tbody>
+                {displayed.map((b) => {
+                  const statusKey: StatusKey =
+                    LEGACY_STATUS[b.status as string] || (b.status as StatusKey) || "new";
+                  const netFact = b.nettoFact ?? b.internalNet;
+                  const realComm = b.realCommission ?? b.commission;
+
+                  return (
+                    <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
+                      <td className="px-2 py-1 border">{fmtDate(b.createdAt)}</td>
+                      <td className="px-2 py-1 border">{b.bookingNumber || "—"}</td>
+                      <td className="px-2 py-1 border">{b.operator || "—"}</td>
+                      <td className="px-2 py-1 border">{b.hotel || "—"}</td>
+                      <td className="px-2 py-1 border">{fmtDate(b.checkIn)}</td>
+                      <td className="px-2 py-1 border">{fmtDate(b.checkOut)}</td>
+                      <td className="px-2 py-1 border">{b.tourists?.[0]?.name || "—"}</td>
+                      <td className="px-2 py-1 border text-right">{fixed2(b.bruttoClient)}</td>
+                      <td className="px-2 py-1 border text-right">{fixed2(netFact)}</td>
+                      <td className="px-2 py-1 border text-right">{fixed2(realComm)}</td>
+                      <td className="px-2 py-1 border">
+                        <Badge className={`inline-flex px-2 py-1 text-xs rounded-sm ring-1 ring-inset ${
+                          STATUS_COLORS[statusKey] || "bg-gray-100 text-gray-800"
+                        }`}>
+                          {t(`statuses.${statusKey}`)}
+                        </Badge>
+                      </td>
+                      <td className="px-2 py-1 border">
+                        {b.invoiceLink ? (
+                          <a href={b.invoiceLink} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
+                            {t("Open")}
+                          </a>
+                        ) : "—"}
+                      </td>
+                      <td className="px-2 py-1 border">
+                        {Array.isArray(b.voucherLinks) && b.voucherLinks.length
+                          ? b.voucherLinks.map((l, i) => (
+                              <div key={i}>
+                                <a href={l} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline">
+                                  {t("Voucher")} {i + 1}
+                                </a>
+                              </div>
+                            ))
+                          : "—"}
+                      </td>
+                      <td className="px-2 py-1 border">
+                        <button
+                          onClick={() => router.push(`/agent/${b.id}`)}
+                          title={t("edit")}
+                          className="text-xl hover:scale-110 transition"
+                        >
+                          ✏️
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+
+              <tfoot className="bg-gray-100 font-semibold text-center">
+                <tr>
+                  <td colSpan={7} className="px-2 py-2 text-right">{t("total")}:</td>
+                  <td className="px-2 py-2">{totalBr.toFixed(2)}</td>
+                  <td className="px-2 py-2">{totalNet.toFixed(2)}</td>
+                  <td className="px-2 py-2">{totalReal.toFixed(2)}</td>
+                  <td colSpan={4} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </AgentLayout>
   );
 }

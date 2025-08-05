@@ -1,4 +1,3 @@
-// pages/olimpya/[id].tsx
 "use client";
 
 import Head from "next/head";
@@ -48,22 +47,18 @@ export default function EditOlimpyaBookingPage() {
     isAdmin,
   } = useAuth();
 
-  // определяем, кто привилегирован (не олимпиа)
   const isPrivileged = isManager || isSuperManager || isAdmin;
   const Layout = isPrivileged ? ManagerLayout : OlimpyaLayout;
 
-  // состояние бронирования
   const [booking, setBooking] = useState<
     (OlimpyaBookingValues & { agentName?: string; agentAgency?: string }) | null
   >(null);
   const [loadingData, setLoadingData] = useState(true);
 
-  // комментарии
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [sending, setSending] = useState(false);
 
-  // защита доступа: либо агент Олимпиа, либо привилегированный
   useEffect(() => {
     if (loading) return;
     if (!user || (!isOlimpya && !isPrivileged)) {
@@ -71,7 +66,6 @@ export default function EditOlimpyaBookingPage() {
     }
   }, [loading, user, isOlimpya, isPrivileged, router]);
 
-  // загрузка заявки
   useEffect(() => {
     if (!id) return;
     (async () => {
@@ -104,6 +98,9 @@ export default function EditOlimpyaBookingPage() {
           realCommission: d.realCommission,
           commissionIgor: d.commissionIgor,
           commissionEvgeniy: d.commissionEvgeniy,
+          commission: d.commission,
+          supplierBookingNumber: d.supplierBookingNumber, // ⬅ добавили
+          payerName: d.payerName,                         // ⬅ добавили
           comment: d.comment,
           agentName: d.agentName,
           agentAgency: d.agentAgency,
@@ -113,7 +110,6 @@ export default function EditOlimpyaBookingPage() {
     })();
   }, [id]);
 
-  // загрузка комментариев
   useEffect(() => {
     if (!id) return;
     (async () => {
@@ -129,14 +125,13 @@ export default function EditOlimpyaBookingPage() {
             id: d.id,
             text: data.text,
             authorName: data.authorName,
-            createdAt: data.createdAt.toDate(),
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
           };
         })
       );
     })();
   }, [id]);
 
-  // сохранение изменений заявки
   const saveBooking = async (values: OlimpyaBookingValues) => {
     if (!id) return;
     const ref = doc(db, "bookings", id);
@@ -148,7 +143,6 @@ export default function EditOlimpyaBookingPage() {
       updatedAt: Timestamp.now(),
     });
 
-    // уведомление в Telegram при смене статуса
     if (old?.status !== values.status) {
       await fetch("/api/telegram/notify", {
         method: "POST",
@@ -168,22 +162,18 @@ export default function EditOlimpyaBookingPage() {
     router.push("/olimpya/bookings");
   };
 
-  // отправка нового комментария
   const handleSend = async () => {
     if (!id || !newComment.trim()) return;
     setSending(true);
 
-    // сохраняем комментарий
     await addDoc(collection(db, `bookings/${id}/comments`), {
       text: newComment.trim(),
       authorName: user?.email || "—",
       createdAt: serverTimestamp(),
     });
 
-    // сбрасываем статус заявки
     await updateDoc(doc(db, "bookings", id), { status: "new" });
 
-    // уведомление менеджерам
     await fetch("/api/telegram/notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -198,7 +188,6 @@ export default function EditOlimpyaBookingPage() {
       }),
     }).catch(console.error);
 
-    // перезагрузка комментариев
     const q = query(
       collection(db, `bookings/${id}/comments`),
       orderBy("createdAt", "asc")
@@ -211,7 +200,7 @@ export default function EditOlimpyaBookingPage() {
           id: d.id,
           text: data.text,
           authorName: data.authorName,
-          createdAt: data.createdAt.toDate(),
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
         };
       })
     );
@@ -224,13 +213,11 @@ export default function EditOlimpyaBookingPage() {
     <Layout>
       <Head>
         <title>
-          {booking
-            ? `Редактировать №${booking.bookingNumber}`
-            : "Загрузка…"}
+          {booking ? `Редактировать №${booking.bookingNumber}` : "Загрузка…"}
         </title>
       </Head>
       <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-        {(loading || loadingData) ? (
+        {loading || loadingData ? (
           <p className="text-center mt-6">Загрузка…</p>
         ) : booking ? (
           <>
@@ -251,7 +238,6 @@ export default function EditOlimpyaBookingPage() {
               bookingNumber={booking.bookingNumber!}
             />
 
-            {/* COMMENTS */}
             <div className="space-y-4 mt-6">
               <h2 className="text-lg font-semibold">Чат комментариев</h2>
               {comments.map((c) => (

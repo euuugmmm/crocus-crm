@@ -42,8 +42,8 @@ export interface OlimpyaBookingValues {
   commissionIgor?: number;
   commissionEvgeniy?: number;
   commission?: number;
-  supplierBookingNumber?: string; // ➕ номер у оператора/поставщика
-  payerName?: string;             // ➕ плательщик (в базу)
+  supplierBookingNumber?: string;
+  payerName?: string;
   comment?: string;
   agentName?: string;
   agentAgency?: string;
@@ -94,7 +94,6 @@ export default function BookingFormManagerOlimpya({
 }: Props) {
   const { t } = useTranslation("common");
 
-  // form state
   const [base, setBase] = useState<"igor" | "evgeniy" | "crocus">("igor");
   const [operator, setOperator] = useState("");
   const [region, setRegion] = useState("");
@@ -125,13 +124,11 @@ export default function BookingFormManagerOlimpya({
     },
   ]);
 
-  // ➕ Поставщик/Плательщик
   const [supplierBookingNumber, setSupplierBookingNumber] = useState("");
   type PayerMode = "agent" | "first" | "custom";
   const [payerMode, setPayerMode] = useState<PayerMode>("agent");
   const [customPayerName, setCustomPayerName] = useState("");
 
-  // commission fields
   const [commissionO, setCommissionO] = useState(0);
   const [overCommission, setOverCommission] = useState(0);
   const [realCommission, setRealCommission] = useState(0);
@@ -139,7 +136,6 @@ export default function BookingFormManagerOlimpya({
   const [commissionEvgeniy, setCommissionEvgeniy] = useState(0);
   const [commission, setCommission] = useState(0);
 
-  // init
   useEffect(() => {
     if (!initialValues) return;
     setBase(initialValues.baseType || "igor");
@@ -175,16 +171,15 @@ export default function BookingFormManagerOlimpya({
           ]
     );
 
-    // ➕ новые поля (инициализация)
     setSupplierBookingNumber(initialValues.supplierBookingNumber || "");
 
-    // Определим режим плательщика из initialValues (если задан payerName)
-    if (initialValues.payerName && initialValues.payerName.trim()) {
-      const pv = initialValues.payerName.trim();
-      const firstTouristName =
-        Array.isArray(initialValues.tourists) && initialValues.tourists[0]?.name
-          ? initialValues.tourists[0].name
-          : "";
+    // payerName -> режим
+    const pv = (initialValues.payerName || "").trim();
+    const firstTouristName =
+      Array.isArray(initialValues.tourists) && initialValues.tourists[0]?.name
+        ? initialValues.tourists[0].name
+        : "";
+    if (pv) {
       if (pv === (agentName || "")) {
         setPayerMode("agent");
         setCustomPayerName("");
@@ -196,7 +191,6 @@ export default function BookingFormManagerOlimpya({
         setCustomPayerName(pv);
       }
     } else {
-      // по умолчанию — first
       setPayerMode("first");
       setCustomPayerName("");
     }
@@ -206,7 +200,6 @@ export default function BookingFormManagerOlimpya({
     }
   }, [initialValues, agentName]);
 
-  // recalc commissions
   useEffect(() => {
     const bc = parseFloat(bruttoClient) || 0;
     const no = parseFloat(nettoOlimpya) || 0;
@@ -216,46 +209,42 @@ export default function BookingFormManagerOlimpya({
     const real = bc - nf;
     const over = no - nf;
 
-    let ig = 0,
-      ev = 0;
+    let ig = 0, ev = 0;
     if (base === "igor") {
-      ig = O + Math.max(0, over) * 0.30;
-      ev = Math.max(0, over) * 0.70;
+      ig = O + Math.max(0, over) * 0.3;
+      ev = Math.max(0, over) * 0.7;
     } else if (base === "evgeniy") {
-      ev = O + Math.max(0, over) * 0.70;
-      ig = Math.max(0, over) * 0.30;
+      ev = O + Math.max(0, over) * 0.7;
+      ig = Math.max(0, over) * 0.3;
     } else {
       ig = real * 0.5;
       ev = real * 0.5;
     }
 
     const rnd = (x: number) => Math.round(x * 100) / 100;
-
     const realR = rnd(real);
+
     setCommissionO(rnd(O));
     setOverCommission(rnd(over));
     setRealCommission(realR);
     setCommissionIgor(rnd(ig));
     setCommissionEvgeniy(rnd(ev));
-
     setCommission(rnd(realR * 0.9));
   }, [bruttoClient, nettoOlimpya, internalNet, base]);
 
-  // helpers
-  const parseDMY = (s: string) => {
+  const parseDMYLocal = (s: string) => {
     const p = parse(s, "dd.MM.yyyy", new Date());
     return isValid(p) ? p : new Date(s);
   };
   const age = (dob: string) => {
-    const b = parseDMY(dob),
-      n = new Date();
+    const b = parseDMYLocal(dob), n = new Date();
     let a = n.getFullYear() - b.getFullYear();
     if (n < new Date(b.setFullYear(b.getFullYear() + a))) a--;
     return a;
   };
   const fmt = (d?: string) => {
     if (!d) return "—";
-    const parsed = parseDMY(d);
+    const parsed = parseDMYLocal(d);
     return isValid(parsed) ? format(parsed, "dd.MM.yyyy") : "—";
   };
 
@@ -286,7 +275,6 @@ export default function BookingFormManagerOlimpya({
   const chTourist = (idx: number, f: keyof Tourist, v: any) =>
     setTourists((t) => t.map((tr, i) => (i === idx ? { ...tr, [f]: v } : tr)));
 
-  // Получить итоговое имя плательщика по выбранному режиму
   const resolvedPayerName = (): string => {
     if (payerMode === "agent") return agentName || "";
     if (payerMode === "first") return tourists[0]?.name || "";
@@ -297,7 +285,7 @@ export default function BookingFormManagerOlimpya({
     e.preventDefault();
     onSubmit({
       bookingNumber,
-      bookingType: initialValues?.bookingType,
+      bookingType: initialValues?.bookingType || "olimpya_base",
       baseType: base,
       operator,
       region,
@@ -323,7 +311,7 @@ export default function BookingFormManagerOlimpya({
       commissionEvgeniy,
       commission,
       supplierBookingNumber,
-      payerName: resolvedPayerName(), // ➕ в базу уходит выбранный плательщик
+      payerName: resolvedPayerName(),
       comment,
       agentName,
       agentAgency,
@@ -332,7 +320,6 @@ export default function BookingFormManagerOlimpya({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 rounded-lg shadow">
-      {/* ───── Info block ───── */}
       <div className="p-4 bg-gray-100 rounded-lg border space-y-4">
         <h2 className="text-lg font-semibold">Информация о заявке</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
@@ -384,7 +371,6 @@ export default function BookingFormManagerOlimpya({
         </div>
       </div>
 
-      {/* ───── База и оператор ───── */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">База клиента</label>
@@ -399,12 +385,10 @@ export default function BookingFormManagerOlimpya({
             ))}
           </select>
         </div>
-
       </div>
 
-      {/* ───── Реквизиты поставщика  ───── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
+        <div>
           <label className="block font-medium">Оператор</label>
           <select
             className="w-full border rounded p-2"
@@ -427,12 +411,8 @@ export default function BookingFormManagerOlimpya({
             placeholder="например, TOCO-123456"
           />
         </div>
-        
-        </div>
-       
-      
+      </div>
 
-      {/* ───── Маршрут и отель ───── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Направление</label>
@@ -454,7 +434,6 @@ export default function BookingFormManagerOlimpya({
         </div>
       </div>
 
-      {/* ───── Города и рейс ───── */}
       <div className="grid grid-cols-3 gap-4">
         <div>
           <label className="block font-medium">Город вылета</label>
@@ -482,11 +461,10 @@ export default function BookingFormManagerOlimpya({
         </div>
       </div>
 
-      {/* ───── Даты ───── */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Заезд</label>
-        {renderMaskedInput(checkIn, setCheckIn)}
+          {renderMaskedInput(checkIn, setCheckIn)}
         </div>
         <div>
           <label className="block font-medium">Выезд</label>
@@ -494,7 +472,6 @@ export default function BookingFormManagerOlimpya({
         </div>
       </div>
 
-      {/* ------- туристы ------- */}
       <h3 className="text-lg font-semibold">Туристы</h3>
       {tourists.map((t, i) => (
         <div key={i} className="relative border p-4 rounded-lg bg-white mb-4 shadow-sm">
@@ -546,7 +523,6 @@ export default function BookingFormManagerOlimpya({
         + Добавить туриста
       </button>
 
-      {/* ───── Финансовые данные ───── */}
       <h3 className="text-lg font-semibold mt-4">Финансовые данные</h3>
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -581,60 +557,59 @@ export default function BookingFormManagerOlimpya({
           onChange={(e) => setinternalNet(e.target.value)}
         />
       </div>
- {/* ───── Реквизиты  плательщика ───── */}
-        <div className="md:col-span-2">
-          <label className="block font-medium">Плательщик</label>
-          <div className="flex flex-col gap-2 mt-1">
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="radio"
-                name="payerMode"
-                value="first"
-                checked={payerMode === "first"}
-                onChange={() => setPayerMode("first")}
-              />
-              <span>Первый турист ({tourists[0]?.name || "—"})</span>
-            </label>
-              <label className="flex items-center gap-2 text-sm">
-              <input
-                type="radio"
-                name="payerMode"
-                value="agent"
-                checked={payerMode === "agent"}
-                onChange={() => setPayerMode("agent")}
-              />
-              <span>Агент ({agentName || "—"})</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="radio"
-                name="payerMode"
-                value="custom"
-                checked={payerMode === "custom"}
-                onChange={() => setPayerMode("custom")}
-              />
-              <span>Другое</span>
-            </label>
-          </div>
-
-          <input
-            className="w-full border rounded p-2 mt-2"
-            value={
-              payerMode === "agent"
-                ? (agentName || "")
-                : payerMode === "first"
-                ? (tourists[0]?.name || "")
-                : customPayerName
-            }
-            onChange={(e) => {
-              if (payerMode === "custom") setCustomPayerName(e.target.value);
-            }}
-            placeholder="Имя плательщика"
-            disabled={payerMode !== "custom"}
-          />
+      <div className="md:col-span-2">
+        <label className="block font-medium">Плательщик</label>
+        <div className="flex flex-col gap-2 mt-1">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name="payerMode"
+              value="first"
+              checked={payerMode === "first"}
+              onChange={() => setPayerMode("first")}
+            />
+            <span>Первый турист ({tourists[0]?.name || "—"})</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name="payerMode"
+              value="agent"
+              checked={payerMode === "agent"}
+              onChange={() => setPayerMode("agent")}
+            />
+            <span>Агент ({agentName || "—"})</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name="payerMode"
+              value="custom"
+              checked={payerMode === "custom"}
+              onChange={() => setPayerMode("custom")}
+            />
+            <span>Другое</span>
+          </label>
         </div>
-      {/* ───── Статус ───── */}
+
+        <input
+          className="w-full border rounded p-2 mt-2"
+          value={
+            payerMode === "agent"
+              ? agentName || ""
+              : payerMode === "first"
+              ? tourists[0]?.name || ""
+              : customPayerName
+          }
+          onChange={(e) => {
+            if (payerMode === "custom") setCustomPayerName(e.target.value);
+          }}
+          placeholder="Имя плательщика"
+          disabled={payerMode !== "custom"}
+        />
+      </div>
+
       <div>
         <label className="block font-medium">Статус заявки</label>
         <select
@@ -648,7 +623,6 @@ export default function BookingFormManagerOlimpya({
         </select>
       </div>
 
-      {/* ───── Комиссии ───── */}
       <div className="p-3 bg-gray-50 border rounded text-sm space-y-1">
         <p><strong>Комиссия Олимпия (O):</strong> {commissionO} €</p>
         <p><strong>Оверкомиссия:</strong> {overCommission} €</p>
@@ -658,7 +632,6 @@ export default function BookingFormManagerOlimpya({
         <p><strong>Комиссия (после -10%):</strong> {commission} €</p>
       </div>
 
-      {/* ───── Комментарий ───── */}
       <div>
         <label className="block font-medium">Комментарий при создании</label>
         <textarea
@@ -668,7 +641,6 @@ export default function BookingFormManagerOlimpya({
         />
       </div>
 
-      {/* ───── Кнопки ───── */}
       <div className="flex justify-between mt-4">
         <button
           type="submit"
