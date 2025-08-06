@@ -224,15 +224,15 @@ export default function AgentBookingsPage() {
                       {t("created")}
                       <SortArrow colKey="createdAt" />
                     </th>
-                    <th className="px-2 py-1 border w-[100px] cursor-pointer" onClick={() => requestSort("bookingNumber")}>
+                    <th className="px-2 py-1 border w-[200px] cursor-pointer" onClick={() => requestSort("bookingNumber")}>
                       №
                       <SortArrow colKey="bookingNumber" />
                     </th>
-                    <th className="px-2 py-1 border w-[150px] cursor-pointer" onClick={() => requestSort("operator")}>
+                    <th className="px-2 py-1 border w-[220px] cursor-pointer" onClick={() => requestSort("operator")}>
                       {t("operator")}
                       <SortArrow colKey="operator" />
                     </th>
-                    <th className="px-2 py-1 border w-[400px] cursor-pointer" onClick={() => requestSort("hotel")}>
+                    <th className="px-2 py-1 border w-[500px] cursor-pointer" onClick={() => requestSort("hotel")}>
                       {t("hotel")}
                       <SortArrow colKey="hotel" />
                     </th>

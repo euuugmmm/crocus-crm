@@ -48,10 +48,11 @@ export default function BookingFormAgent({
   const [crocusFee, setCrocusFee] = useState(0);
   const [cardProcessing, setCardProcessing] = useState(0);
   const [commissionAgent, setCommissionAgent] = useState(0);
-  const [netToPay, setNetToPay] = useState(0); // "Netto к оплате" (для payerAgent)
+  const [netToPay, setNetToPay] = useState(0); // "Netto к оплате" (для payer=agent)
 
   const [comment, setComment] = useState("");
 
+  // Туристы
   const [tourists, setTourists] = useState([
     {
       name: "",
@@ -76,7 +77,6 @@ export default function BookingFormAgent({
 
   // ======= РАСЧЁТЫ =======
   useEffect(() => {
-    // Пока оператор не выбран — ничего не считаем
     if (!operator) {
       setCommissionBase(0);
       setCrocusFee(0);
@@ -85,7 +85,6 @@ export default function BookingFormAgent({
       setNetToPay(0);
       return;
     }
-
     const bc = num(bruttoClient);
     const bo = num(bruttoOperator);
     const net = num(nettoOperator);
@@ -97,67 +96,35 @@ export default function BookingFormAgent({
     let _netToPay = 0;
 
     if (isToco) {
-      // ===== TOCO RO / TOCO MD =====
-      const feePct = isTocoMD ? TOCO_MD_FEE : TOCO_RO_FEE; // 2% для MD, 1.5% для RO
-
+      const feePct = isTocoMD ? TOCO_MD_FEE : TOCO_RO_FEE;
       if (payer === "tourist") {
-        // Поля: Brutto клиента, Netto оператора
-        // База комиссии: markup
         _commissionBase = Math.max(0, bc - net);
-
-        // Сбор Crocus от нетто
         _crocusFee = net * feePct;
-
-        // Процессинг (если картой) — от суммы клиента
         _cardProc = paymentMethod === "card" ? bc * CARD_PROC : 0;
-
-        // Итог комиссии агента
         _commissionAgent = Math.max(0, _commissionBase - _crocusFee - _cardProc);
-
-        // Агент ничего не платит оператору напрямую
         _netToPay = 0;
       } else {
-        // payer === 'agent'
-        // Поля: Netto оператора + "Netto к оплате" (нередактируемо)
-        const basePay = net + net * feePct; // net + crocusFee
+        const basePay = net + net * feePct;
         _netToPay = paymentMethod === "card" ? basePay * (1 + CARD_PROC) : basePay;
-
-        // База комиссии: если известен brutto клиента — считаем markup; иначе 0
         _commissionBase = bc > 0 ? Math.max(0, bc - net) : 0;
-
         _crocusFee = net * feePct;
         _cardProc = paymentMethod === "card" ? basePay * CARD_PROC : 0;
-
         _commissionAgent = Math.max(0, _commissionBase - _crocusFee - _cardProc);
       }
     } else {
-      // ===== ПРОЧИЕ ОПЕРАТОРЫ =====
       if (payer === "tourist") {
-        // Поля: Brutto клиента, Brutto оператора
-        // База комиссии: (markup) + 6% от брутто оператора
         const markup = Math.max(0, bc - bo);
         _commissionBase = markup + bo * OTHER_AGENT_PCT;
-
-        // Процессинг (если картой) — от суммы клиента
         _cardProc = paymentMethod === "card" ? bc * CARD_PROC : 0;
-
-        _crocusFee = 0; // для прочих операторов отдельного crocusFee нет
+        _crocusFee = 0;
         _commissionAgent = Math.max(0, _commissionBase - _cardProc);
         _netToPay = 0;
       } else {
-        // payer === 'agent'
-        // Поля: Brutto оператора + "Netto к оплате"
-        const basePay = bo * (1 - OTHER_AGENT_PCT); // оператору уходит 94%
+        const basePay = bo * (1 - OTHER_AGENT_PCT);
         _netToPay = paymentMethod === "card" ? basePay * (1 + CARD_PROC) : basePay;
-
-        // Если известен brutto клиента — посчитаем комиссию как обычно; иначе 0
         const markup = bc > 0 ? Math.max(0, bc - bo) : 0;
         _commissionBase = bc > 0 ? markup + bo * OTHER_AGENT_PCT : 0;
-
-        _cardProc = paymentMethod === "card" ? _netToPay * CARD_PROC / (1 + CARD_PROC) : 0; 
-        // пояснение: чтобы показывать именно комиссию 1.8% как строку, можно и просто:
         _cardProc = paymentMethod === "card" ? basePay * CARD_PROC : 0;
-
         _crocusFee = 0;
         _commissionAgent = Math.max(0, _commissionBase - _cardProc);
       }
@@ -207,19 +174,14 @@ export default function BookingFormAgent({
       payer,
       paymentMethod,
       tourists: tourists.filter((t) => t.name),
-
-      // исходные суммы
       bruttoClient: num(bruttoClient),
       bruttoOperator: num(bruttoOperator),
       nettoOperator: num(nettoOperator),
-
-      // расчётные суммы
       commissionBase,
       crocusFee,
       cardProcessing,
       commission: commissionAgent,
       netToPay,
-
       comment,
     });
     router.push("/agent/bookings");
@@ -235,7 +197,6 @@ export default function BookingFormAgent({
     />
   );
 
-  // ===== UI =====
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {/* Информационный блок */}
@@ -245,7 +206,7 @@ export default function BookingFormAgent({
         <p><strong>{t("bookingNumber")}:</strong> {bookingNumber}</p>
       </div>
 
-      {/* Оператор */}
+      {/* Оператор и детали тура */}
       <label className="block text-sm font-medium mb-1">{t("operator")}</label>
       <select
         className="w-full border rounded p-2"
@@ -259,137 +220,169 @@ export default function BookingFormAgent({
         ))}
       </select>
 
-      {/* Основные поля тура */}
       <label className="block text-sm font-medium mb-1">{t("region")}</label>
       <input type="text" value={region} onChange={(e) => setRegion(e.target.value)} className="w-full border rounded p-2"/>
-
       <label className="block text-sm font-medium mb-1">{t("departureCity")}</label>
       <input type="text" value={departureCity} onChange={(e) => setDepartureCity(e.target.value)} className="w-full border rounded p-2"/>
-
       <label className="block text-sm font-medium mb-1">{t("arrivalCity")}</label>
       <input type="text" value={arrivalCity} onChange={(e) => setArrivalCity(e.target.value)} className="w-full border rounded p-2"/>
-
       <label className="block text-sm font-medium mb-1">{t("flightNumber")}</label>
       <input type="text" value={flightNumber} onChange={(e) => setFlightNumber(e.target.value)} className="w-full border rounded p-2"/>
-
       <label className="block text-sm font-medium mb-1">{t("flightTime")}</label>
       <input type="text" value={flightTime} onChange={(e) => setFlightTime(e.target.value)} className="w-full border rounded p-2"/>
-
       <label className="block text-sm font-medium mb-1">{t("hotel")}</label>
       <input type="text" value={hotel} onChange={(e) => setHotel(e.target.value)} className="w-full border rounded p-2"/>
-
       <label className="block text-sm font-medium mb-1">{t("checkIn")}</label>
       {renderMaskedInput(checkIn, setCheckIn)}
-
       <label className="block text-sm font-medium mb-1">{t("checkOut")}</label>
       {renderMaskedInput(checkOut, setCheckOut)}
-
       <label className="block text-sm font-medium mb-1">{t("room")}</label>
       <input type="text" value={room} onChange={(e) => setRoom(e.target.value)} className="w-full border rounded p-2"/>
-
       <label className="block text-sm font-medium mb-1">{t("mealPlan")}</label>
       <input type="text" value={mealPlan} onChange={(e) => setMealPlan(e.target.value)} className="w-full border rounded p-2"/>
 
+      {/* туристы */}
+      <h3 className="text-lg font-semibold">Туристы</h3>
+      {tourists.map((t, i) => (
+        <div key={i} className="relative border p-4 rounded mb-4">
+          {tourists.length > 1 && (
+            <button
+              type="button"
+              onClick={() => removeTourist(i)}
+              className="absolute top-2 right-2 text-red-500"
+            >🗑</button>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block font-medium">Имя</label>
+              <input
+                type="text"
+                value={t.name}
+                onChange={e => updateTourist(i, "name", e.target.value)}
+                className="w-full border rounded p-2"
+              />
+            </div>
+            <div>
+              <label className="block font-medium">ДР (дд.мм.гггг)</label>
+              {renderMaskedInput(t.dob, v => updateTourist(i, "dob", v))}
+            </div>
+            <div>
+              <label className="block font-medium">№ паспорта</label>
+              <input
+                type="text"
+                value={t.passportNumber}
+                onChange={e => updateTourist(i, "passportNumber", e.target.value)}
+                className="w-full border rounded p-2"
+              />
+            </div>
+            <div>
+              <label className="block font-medium">Действителен до</label>
+              {renderMaskedInput(t.passportValidUntil, v => updateTourist(i, "passportValidUntil", v))}
+            </div>
+            <div>
+              <label className="block font-medium">Гражданство</label>
+              <input
+                type="text"
+                value={t.nationality}
+                onChange={e => updateTourist(i, "nationality", e.target.value)}
+                className="w-full border rounded p-2"
+              />
+            </div>
+            <div className="flex items-center mt-2">
+              <input
+                type="checkbox"
+                checked={t.hasEUDoc}
+                onChange={e => updateTourist(i, "hasEUDoc", e.target.checked)}
+                className="mr-2"
+              />
+              <label>EU документ</label>
+            </div>
+          </div>
+        </div>
+      ))}
+      <button type="button" onClick={addTourist} className="text-blue-600 text-sm">+ добавить туриста</button>
+
       {/* Цены */}
-      <h3 className="text-lg font-semibold mt-4">{t("pricing") || "Цены"}</h3>
-
-<label className="block text-sm font-medium mb-1">
-  {t("payerWhopays")}
-</label>
+      <h3 className="text-lg font-semibold mt-4">{t("pricing")}</h3>
+      <label className="block text-sm font-medium mb-1">{t("payerWhopays")}</label>
       <select value={payer} onChange={(e) => setPayer(e.target.value)} className="w-full border rounded p-2">
-        <option value="tourist">{t("payerTourist") || "payerTourist"}</option>
-        <option value="agent">{t("payerAgent") || "payerAgent"}</option>
+        <option value="tourist">{t("payerTourist")}</option>
+        <option value="agent">{t("payerAgent")}</option>
       </select>
-
       <label className="block text-sm font-medium mb-1">{t("paymentMethod")}</label>
       <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="w-full border rounded p-2">
-        <option value="card">{t("paymentCard") || "Картой (комиссия за процессинг)"}</option>
-        <option value="iban">{t("paymentIban") || "iban"}</option>
-        <option value="crypto">{t("paymentCrypto") || "crypto"}</option>
+        <option value="card">{t("paymentCard")}</option>
+        <option value="iban">{t("paymentIban")}</option>
+        <option value="crypto">{t("paymentCrypto")}</option>
       </select>
 
-      {/* Поля сумм по условиям */}
       {isToco ? (
         <>
-          {/* TOCO: всегда есть Netto оператора; Brutto клиента нужен для расчёта базовой комиссии */}
           {payer === "tourist" && (
             <>
-              <label className="block text-sm font-medium mb-1">{t("bruttoClient") || "Brutto клиента (€)"}</label>
+              <label className="block text-sm font-medium mb-1">{t("bruttoClient")}</label>
               <input type="number" value={bruttoClient} onChange={(e) => setBruttoClient(e.target.value)} className="w-full border rounded p-2"/>
             </>
           )}
-
-          {/* В payer=agent Brutto клиента можно тоже ввести (если известно) для корректной комиссии */}
           {payer === "agent" && (
             <>
-              <label className="block text-sm font-medium mb-1">{t("bruttoClient")} ({t("optional") || "опционально"})</label>
+              <label className="block text-sm font-medium mb-1">{t("bruttoClient")} ({t("optional")})</label>
               <input type="number" value={bruttoClient} onChange={(e) => setBruttoClient(e.target.value)} className="w-full border rounded p-2"/>
             </>
           )}
-
-          <label className="block text-sm font-medium mb-1">{t("nettoOperator") || "Netto оператора (€)"}</label>
+          <label className="block text-sm font-medium mb-1">{t("nettoOperator")}</label>
           <input type="number" value={nettoOperator} onChange={(e) => setNettoOperator(e.target.value)} className="w-full border rounded p-2"/>
-
           {payer === "agent" && (
             <>
-              <label className="block text-sm font-medium mb-1">{t("netToPay") || "Netto к оплате (€) — не редактируется"}</label>
+              <label className="block text-sm font-medium mb-1">{t("netToPay")}</label>
               <input type="number" value={netToPay} readOnly className="w-full border rounded p-2 bg-gray-50"/>
             </>
           )}
         </>
       ) : (
         <>
-          {/* Прочие операторы: работаем с Brutto оператора, Brutto клиента */}
           {payer === "tourist" && (
             <>
-              <label className="block text-sm font-medium mb-1">{t("bruttoClient") || "Brutto клиента (€)"}</label>
+              <label className="block text-sm font-medium mb-1">{t("bruttoClient")}</label>
               <input type="number" value={bruttoClient} onChange={(e) => setBruttoClient(e.target.value)} className="w-full border rounded p-2"/>
-
-              <label className="block text-sm font-medium mb-1">{t("bruttoOperator") || "Brutto оператора (€)"}</label>
+              <label className="block text-sm font-medium mb-1">{t("bruttoOperator")}</label>
               <input type="number" value={bruttoOperator} onChange={(e) => setBruttoOperator(e.target.value)} className="w-full border rounded p-2"/>
             </>
           )}
-
           {payer === "agent" && (
             <>
-              {/* Brutto клиента опционален: если введён — посчитаем комиссию */}
-              <label className="block text-sm font-medium mb-1">{t("bruttoClient")} ({t("optional") || "опционально"})</label>
+              <label className="block text-sm font-medium mb-1">{t("bruttoClient")} ({t("optional")})</label>
               <input type="number" value={bruttoClient} onChange={(e) => setBruttoClient(e.target.value)} className="w-full border rounded p-2"/>
-
-              <label className="block text-sm font-medium mb-1">{t("bruttoOperator") || "Brutto оператора (€)"}</label>
+              <label className="block text-sm font-medium mb-1">{t("bruttoOperator")}</label>
               <input type="number" value={bruttoOperator} onChange={(e) => setBruttoOperator(e.target.value)} className="w-full border rounded p-2"/>
-
-              <label className="block text-sm font-medium mb-1">{t("netToPay") || "Netto к оплате (€) — не редактируется"}</label>
+              <label className="block text-sm font-medium mb-1">{t("netToPay")}</label>
               <input type="number" value={netToPay} readOnly className="w-full border rounded p-2 bg-gray-50"/>
             </>
           )}
         </>
       )}
 
-      {/* Детализация */}
+      {/* Детализация расчётов */}
       {operator && (
-        <div className="p-3 bg-gray-50 border rounded text-sm mt-4 space-y-1">
+        <div className="p-3 bg-gray-50 border rounded text-sm space-y-1">
           <p><strong>{t("commissionBase")}:</strong> {commissionBase.toFixed(2)} €</p>
-           {isToco && (
-      <p>
-        <strong>{t("crocusFee")}:</strong> –{crocusFee.toFixed(2)} €
-      </p>
-    )}
-          {!isToco && <p><strong>{t("crocusFee")}:</strong> {crocusFee.toFixed(2)} €</p>}
+          {isToco ? (
+            <p><strong>{t("crocusFee")}:</strong> –{crocusFee.toFixed(2)} €</p>
+          ) : (
+            <p><strong>{t("crocusFee")}:</strong> {crocusFee.toFixed(2)} €</p>
+          )}
           {cardProcessing > 0 && (
-           <p>
-           <strong>{t("cardProcessingFee")}:</strong> –{cardProcessing.toFixed(2)} €
-            </p>
-            )}
+            <p><strong>{t("cardProcessingFee")}:</strong> –{cardProcessing.toFixed(2)} €</p>
+          )}
           <p><strong>{t("commissionAgent")}:</strong> {commissionAgent.toFixed(2)} €</p>
           {payer === "agent" && (
-            <p><strong>{t("toPay") || "К оплате"}:</strong> {netToPay.toFixed(2)} €</p>
+            <p><strong>{t("toPay")}:</strong> {netToPay.toFixed(2)} €</p>
           )}
         </div>
       )}
 
       {/* Комментарий */}
-      <label className="block text-sm font-medium mb-1 mt-4">{t("comment")}</label>
+      <label className="block text-sm font-medium mb-1">{t("comment")}</label>
       <textarea value={comment} onChange={(e) => setComment(e.target.value)} className="w-full border rounded p-2"/>
 
       {/* Скриншоты */}

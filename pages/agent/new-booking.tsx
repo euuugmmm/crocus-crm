@@ -1,4 +1,3 @@
-// pages/agent/new-booking.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -32,7 +31,6 @@ export default function NewBooking() {
   const [bookingNumber, setBookingNumber] = useState<string>("");
 
   useEffect(() => {
-    let active = true;
     if (loading) return;
     if (!user) {
       router.replace("/login");
@@ -43,9 +41,6 @@ export default function NewBooking() {
       return;
     }
     generateBookingNumber();
-    return () => {
-      active = false;
-    };
   }, [user, loading, isAgent, router]);
 
   async function generateBookingNumber() {
@@ -59,51 +54,13 @@ export default function NewBooking() {
     setBookingNumber(`CRT-${String(next * 7).padStart(5, "0")}`);
   }
 
-  function calcCommission({
-    operator,
-    bruttoClient = 0,
-    internalNet = 0,
-    bruttoOperator = 0,
-    paymentMethod,
-  }: {
-    operator: string;
-    bruttoClient: number;
-    internalNet: number;
-    bruttoOperator: number;
-    paymentMethod: string;
-  }) {
-    const share = paymentMethod === "iban" ? 0.85 : 0.8;
-    const bankFee = paymentMethod === "card" ? bruttoClient * 0.015 : 0;
-    let commission = 0;
-
-    if (["TOCO TOUR RO", "TOCO TOUR MD"].includes(operator)) {
-      commission = (bruttoClient - internalNet) * share;
-    } else {
-      const markup = Math.max(0, bruttoClient - bruttoOperator);
-      commission = bruttoOperator * 0.03 + markup * share;
-    }
-
-    return { agent: +commission.toFixed(2), bankFee: +bankFee.toFixed(2) };
-  }
-
   async function handleCreate(form: any) {
-    const { agent, bankFee } = calcCommission({
-      operator: form.operator,
-      bruttoClient: form.bruttoClient,
-      internalNet: form.nettoOperator,
-      bruttoOperator: form.bruttoOperator,
-      paymentMethod: form.paymentMethod,
-    });
-
-    // Сохраняем новую заявку в Firestore, уже с bookingType
     await setDoc(
       doc(db, "bookings", bookingNumber),
       {
-        bookingType: "subagent",      // <-- добавлено
+        bookingType: "subagent",
         bookingNumber,
         ...form,
-        commission: agent,
-        bankFee,
         agentId: user!.uid,
         agentName: userData?.agentName ?? "",
         agentAgency: userData?.agencyName ?? "",
@@ -113,7 +70,6 @@ export default function NewBooking() {
       { merge: true }
     );
 
-    // Уведомляем менеджеров через Telegram
     await fetch("/api/telegram/notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -139,8 +95,6 @@ export default function NewBooking() {
   }
 
   return (
-
-    
     <AgentLayout>
       <Head>
         <title>{t("newBooking")} — CrocusCRM</title>
