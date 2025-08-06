@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import Head from "next/head";
 import {
   doc,
   setDoc,
@@ -33,6 +32,8 @@ export default function NewBooking() {
 
   useEffect(() => {
     let active = true;
+    if (!active) return;
+
     if (loading) return;
     if (!user) {
       router.replace("/login");
@@ -43,6 +44,7 @@ export default function NewBooking() {
       return;
     }
     generateBookingNumber();
+
     return () => {
       active = false;
     };
@@ -95,11 +97,9 @@ export default function NewBooking() {
       paymentMethod: form.paymentMethod,
     });
 
-    // Сохраняем новую заявку в Firestore, уже с bookingType
     await setDoc(
       doc(db, "bookings", bookingNumber),
       {
-        bookingType: "subagent",      // <-- добавлено
         bookingNumber,
         ...form,
         commission: agent,
@@ -113,7 +113,6 @@ export default function NewBooking() {
       { merge: true }
     );
 
-    // Уведомляем менеджеров через Telegram
     await fetch("/api/telegram/notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -139,21 +138,16 @@ export default function NewBooking() {
   }
 
   return (
-
-    
-    <AgentLayout>
-      <Head>
-        <title>{t("newBooking")} — CrocusCRM</title>
-      </Head>
-      <div className="max-w-2xl mx-auto px-4 py-6">
-        <h1 className="text-2xl font-bold mb-4">{t("newBooking")}</h1>
-        <BookingForm
-          onSubmit={handleCreate}
-          bookingNumber={bookingNumber}
-          agentName={userData?.agentName ?? ""}
-          agentAgency={userData?.agencyName ?? ""}
-        />
-      </div>
-    </AgentLayout>
+<AgentLayout>
+  <div className="max-w-2xl mx-auto px-4 py-6">
+    <h1 className="text-2xl font-bold mb-4">{t("newBookingHeader")}</h1>
+    <BookingForm
+      onSubmit={handleCreate}
+      bookingNumber={bookingNumber}
+      agentName={userData?.agentName ?? ""}
+      agentAgency={userData?.agencyName ?? ""}
+    />
+  </div>
+</AgentLayout>
   );
 }

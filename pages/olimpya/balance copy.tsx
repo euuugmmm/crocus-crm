@@ -4,7 +4,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import Head from "next/head";
 import { format } from "date-fns";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -115,9 +114,6 @@ export default function AgentBalancePage() {
 
   return (
     <AgentLayout>
-      <Head>
-        <title>{t("balanceAvailable")} — CrocusCRM</title>
-      </Head>
       <Card className="max-w-4xl mx-auto mt-8">
         <CardContent className="p-6 flex flex-col gap-6">
           {/* ДОСТУПНО К ВЫПЛАТЕ */}

@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import Head from "next/head";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/context/AuthContext";
@@ -59,9 +58,6 @@ export default function ProfilePage() {
 
   return (
     <AgentLayout>
-      <Head>
-        <title>{t("profileTitle")} — CrocusCRM</title>
-      </Head>
       <main className="max-w-4xl mx-auto p-6 space-y-8">
         <section className="bg-white rounded shadow p-6 space-y-6">
           <h1 className="text-2xl font-bold">{t("profileTitle")}</h1>

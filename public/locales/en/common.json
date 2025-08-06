@@ -188,7 +188,6 @@
   "sending": "Sending…",
   "crocusProfit": "CROCUS Profit",
   "actions": "Actions",
-
   "olimpyaProfitBeforeTax": "Olimpya Profit (before tax)",
   "olimpyaNetPayout": "To be paid (after tax)",
   "payoutType": "Payout Type",
@@ -200,5 +199,16 @@
   "statuses.awaiting_confirm": "Awaiting Confirmation",
   "statuses.confirmed_dmc": "Confirmed DMC",
   "statuses.confirmed_dmc_flight": "Confirmed DMC + Flight",
-  "payoutCompany": "Company (-24%)"
+  "payoutCompany": "Company (-24%)",
+  "touristName": "Tourist Name",
+  "payerWhopays": "Payer (who pays for the booking)",
+  "payerTourist": "Tourist",
+  "payerAgent": "Agent",
+  "netToPay": "Net to Pay (€)",
+  "commissionBase": "Base Commission (€)",
+  "crocusFee": "Crocus Fee (%)",
+  "cardProcessingFee": "Card Processing Fee (%)",
+  "commissionAgent": "Agent Commission (€)",
+  "toPay": "To Pay (€)"
+
 }

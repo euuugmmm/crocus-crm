@@ -16,6 +16,17 @@ export const STATUS_KEYS = [
 
 export type StatusKey = typeof STATUS_KEYS[number];
 
+// Статусы, доступные агенту
+export const AGENT_STATUS_KEYS: StatusKey[] = [
+  "new",
+  "awaiting_payment",
+  "paid",
+  "awaiting_confirm",
+  "confirmed",
+  "finished",
+  "cancelled",
+];
+
 // Цвета бейджей под каждый ключ статуса
 export const STATUS_COLORS: Record<StatusKey, string> = {
   new: "bg-yellow-50 text-yellow-800 ring-yellow-600/20",

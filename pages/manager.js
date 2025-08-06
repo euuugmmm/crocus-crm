@@ -10,7 +10,7 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext.js';
 import StatusBadge from '../components/StatusBadge';
 import { calculateCommission } from '../lib/calculations';
 

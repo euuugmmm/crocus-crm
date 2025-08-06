@@ -196,5 +196,15 @@
   "statuses.awaiting_confirm": "Очікує підтвердження",
   "confirmed_dmc": "Підтверджено DMC",
   "confirmed_dmc_flight": "Підтверджено DMC + Авіа",
-  "payoutCompany": "Компанія (-24%)"
+  "payoutCompany": "Компанія (-24%)",
+  "touristName": "Ім'я туриста",
+  "payerWhopays": "Платник (хто оплачує заявку)",
+  "payerTourist": "Турист",
+  "payerAgent": "Агент",
+  "netToPay": "Нетто до оплати (€)",
+  "commissionBase": "Базова комісія (€)",
+  "crocusFee": "Комісія Crocus (%)",
+  "cardProcessingFee": "Комісія за обробку картки (%)",
+  "commissionAgent": "Комісія агента (€)",
+  "toPay": "До оплати (€)"
 }

@@ -1,4 +1,5 @@
 // components/AgentLayout.tsx
+import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useAuth } from "@/context/AuthContext";
@@ -7,10 +8,21 @@ import { useTranslation } from "next-i18next";
 import { Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-export default function AgentLayout({ children }: { children: React.ReactNode }) {
+export default function AgentLayout({
+  children,
+  pageTitle, // опциональный проп для динамического заголовка
+}: {
+  children: React.ReactNode;
+  pageTitle?: string;
+}) {
   const router = useRouter();
   const { t, i18n } = useTranslation("common");
   const { logout, userData } = useAuth();
+
+  // Если pageTitle не передан, возьмём бренд
+  const title = pageTitle
+    ? `${pageTitle} — ${t("brand")}`
+    : t("brand");
 
   const nav = [
     { href: "/agent/bookings", label: t("navBookings") },

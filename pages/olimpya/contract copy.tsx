@@ -2,7 +2,6 @@
 "use client";
 
 import { useRouter } from "next/router";
-import Head from "next/head";
 import { useAuth } from "@/context/AuthContext";
 import ContractForm from "@/components/ContractForm";
 import { useTranslation } from "next-i18next";
@@ -26,9 +25,6 @@ export default function ContractPage() {
 
   return (
     <AgentLayout>
-      <Head>
-              <title>{t("generateContract")} — CrocusCRM</title>
-            </Head>
       <main className="max-w-xl mx-auto p-6">
         <h1 className="text-2xl font-bold mb-4">{t("generateContract")}</h1>
         <ContractForm userId={user.uid} onDone={() => router.push("/agent/profile")} />

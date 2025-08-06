@@ -188,7 +188,6 @@
   "sending": "Отправка…",
   "crocusProfit": "Доход CROCUS",
   "actions": "Действия",
-  
   "olimpyaProfitBeforeTax": "Доход Olimpya (до налога)",
   "olimpyaNetPayout": "К выплате (после налога)",
   "payoutType": "Тип выплаты",
@@ -200,8 +199,18 @@
   "statuses.awaiting_confirm": "Ожидает подтверждения",
   "statuses.confirmed_dmc": "Подтверждено DMC",
   "statuses.confirmed_dmc_flight": "Подтверждено DMC + Авиа",
-  "payoutCompany": "Компания (-24 %)"
+  "payoutCompany": "Компания (-24 %)",
+  "touristName": "Имя туриста",
+  "payerWhopays": "Плательщик (кто оплачивает заявку)",
+  "payerTourist": "Турист",
+  "payerAgent": "Агент",
+  "netToPay": "Нетто к оплате (€)",
+  "commissionBase": "Базовая комиссия (€)",
+  "crocusFee": "Crocus комиссия (%)",
+  "cardProcessingFee": "Комиссия за процессинг карты (%)",
+  "commissionAgent": "Комиссия агента (€)",
+  "toPay": "К оплате (€)"
 
-  
+
 
 }

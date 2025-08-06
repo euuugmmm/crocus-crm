@@ -19,7 +19,7 @@
     "isolatedModules": true,
     "jsx": "preserve"
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "components/BookingFormManager.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js"],
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "components/BookingFormManager.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "components/BookingFormAgent.js", "context/AuthContext.js", "scripts/fixCommissionPaid.js"],
     "exclude": [
     "node_modules",
     "functions" 

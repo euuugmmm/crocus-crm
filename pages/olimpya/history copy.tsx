@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import Head from "next/head";
 import { format } from "date-fns";
 import { useAuth } from "@/context/AuthContext";
 import { getAgentCommissions, getAgentPayouts } from "@/lib/finance";
@@ -62,9 +61,6 @@ export default function AgentHistoryPage() {
 
   return (
     <AgentLayout>
-            <Head>
-              <title>{t("operationHistory")} — CrocusCRM</title>
-            </Head>
       <Card className="max-w-5xl mx-auto mt-8">
         <CardContent className="p-6">
           <h1 className="text-2xl font-bold mb-4">{t("operationHistory")}</h1>
