@@ -27,6 +27,20 @@ export const AGENT_STATUS_KEYS: StatusKey[] = [
   "cancelled",
 ];
 
+// **Добавляем внутренние статусы**
+export const INTERNAL_STATUS_KEYS: StatusKey[] = [
+  "new",
+  "created_dmc",
+  "created_toco",
+  "confirmed_dmc",
+  "confirmed_dmc_flight",
+  "confirmed",
+  "finished",
+  "cancelled",
+];
+
+
+
 // Цвета бейджей под каждый ключ статуса
 export const STATUS_COLORS: Record<StatusKey, string> = {
   new: "bg-yellow-50 text-yellow-800 ring-yellow-600/20",
