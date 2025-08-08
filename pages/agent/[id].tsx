@@ -46,7 +46,7 @@ type BookingData = {
   room: string;
   mealPlan: string;
   bruttoClient: number;
-  status: string;
+  agentStatus: string;
   tourists: Array<{
     name: string;
     dob: string;
@@ -92,7 +92,7 @@ export default function BookingCommentsPage() {
           room: d.room,
           mealPlan: d.mealPlan,
           bruttoClient: d.bruttoClient,
-          status: d.status,
+          agentStatus: d.agentStatus,
           tourists: Array.isArray(d.tourists)
             ? d.tourists.map((t: any) => ({
                 name: t.name,
@@ -140,7 +140,7 @@ export default function BookingCommentsPage() {
       createdAt: serverTimestamp(),
     });
 
-    await updateDoc(doc(db, "bookings", id), { status: "new" });
+    await updateDoc(doc(db, "bookings", id), { agentStatus: "new" });
 
     await fetch("/api/telegram/notify", {
       method: "POST",
@@ -207,7 +207,7 @@ export default function BookingCommentsPage() {
             <p><strong>{t("labelRoom")}:</strong> {booking.room}</p>
             <p><strong>{t("labelBrutto")}:</strong> {booking.bruttoClient.toFixed(2)} €</p>
             <p><strong>{t("labelMeal")}:</strong> {booking.mealPlan}</p>
-            <p><strong>{t("labelStatus")}:</strong> {booking.status}</p>
+            <p><strong>{t("labelStatus")}:</strong> {booking.agentStatus}</p>
 
             <h3 className="mt-4 font-semibold">{t("tourists")}</h3>
             {booking.tourists.map((tst, i) => (
