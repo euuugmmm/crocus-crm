@@ -1,6 +1,7 @@
 // pages/manager/payouts.tsx
 "use client";
 
+import Head from "next/head";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import {
@@ -8,9 +9,9 @@ import {
   query,
   where,
   getDocs,
-  deleteDoc,
   doc,
   Timestamp,
+  updateDoc,
 } from "firebase/firestore";
 import { format, parseISO } from "date-fns";
 import { db } from "@/firebaseConfig";
@@ -25,8 +26,9 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { getAllBalances, getAllPayouts, createSimplePayout } from "@/lib/finance";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
+import { getAllBalances, getAllPayouts } from "@/lib/finance";
+import { AGENT_WITHHOLD_PCT } from "@/lib/constants/fees"; // например, 0.12
 
 type Booking = {
   id: string;
@@ -36,18 +38,47 @@ type Booking = {
   tourists: number;
   checkIn: string;
   checkOut: string;
-  commission: number;
-  commissionPaidAmount?: number;
+  // Комиссии как брутто/нетто
+  commissionGross: number;             // общая брутто-комиссия по брони
+  commissionNet: number;               // общая нетто-комиссия (commissionGross * (1 - pct))
+  commissionPaidGrossAmount: number;   // уже выплачено брутто
+  commissionPaidNetAmount: number;     // уже выплачено нетто
+};
+
+type PayoutItem = {
+  bookingId: string;
+  bookingNumber?: string;
+  hotel?: string;
+  checkIn?: string;
+  checkOut?: string;
+  amountGross: number; // выплата по брони в брутто
+  amountNet: number;   // выплата по брони в нетто (рассчитанная)
+  closeFully?: boolean;
+};
+
+type Payout = {
+  id: string;
+  agentId: string;
+  createdAt?: any;
+  amount: number;             // факт к перечислению (нетто - transferFee)
+  totalGross?: number;        // сумма по позициям (брутто)
+  totalNet?: number;          // сумма по позициям (нетто)
+  transferFee?: number;       // комиссия перевода
+  comment?: string;
+  annexLink?: string;
+  items?: PayoutItem[];
 };
 
 export default function ManagerPayoutsPage() {
   const { user, isManager } = useAuth();
   const router = useRouter();
 
-  // Shared state
+  // справочник
   const [agents, setAgents] = useState<any[]>([]);
   const [balances, setBalances] = useState<any[]>([]);
-  const [payouts, setPayouts] = useState<any[]>([]);
+  const [payouts, setPayouts] = useState<Payout[]>([]);
+
+  // Фильтры выплат
   const [filters, setFilters] = useState({
     agentId: "all",
     from: "",
@@ -55,121 +86,94 @@ export default function ManagerPayoutsPage() {
     min: "",
     max: "",
   });
+  const [filterComment, setFilterComment] = useState("");
+  const [filterHasAnnex, setFilterHasAnnex] = useState<"all" | "with" | "without">("all");
 
-  // 1️⃣ Payout by selecting bookings
-  const [unpaid, setUnpaid] = useState<Booking[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selAgentForBookings, setSelAgentForBookings] = useState<string>("");
-  const [creatingByBooking, setCreatingByBooking] = useState(false);
-
-  // 2️⃣ Manual payout (with partial items)
+  // Ручная выплата (единый сценарий)
   const [manualForm, setManualForm] = useState({ agentId: "", amount: "", comment: "" });
+  const [transferFee, setTransferFee] = useState<string>(""); // комиссия перевода для payout
   const [manualBalance, setManualBalance] = useState<number | null>(null);
   const [creatingManual, setCreatingManual] = useState(false);
+
+  // Невыплаченные по агенту
   const [manualUnpaid, setManualUnpaid] = useState<Booking[]>([]);
   const [manualChecked, setManualChecked] = useState<Set<string>>(new Set());
-  const [manualAmounts, setManualAmounts] = useState<Record<string, string>>({});
+  const [manualAmountsGross, setManualAmountsGross] = useState<Record<string, string>>({});
+  const [manualClose, setManualClose] = useState<Set<string>>(new Set()); // закрыть полностью
 
-  // Guard + load agents, balances & payouts
+  // Редактор выплаты
+  const [editing, setEditing] = useState<Payout | null>(null);
+  const [editTransferFee, setEditTransferFee] = useState<string>("");
+  const [editComment, setEditComment] = useState<string>("");
+  const [editItems, setEditItems] = useState<PayoutItem[]>([]);
+
+  /* --------------------- загрузка --------------------- */
   useEffect(() => {
     if (!user || !isManager) {
       router.replace("/login");
       return;
     }
     (async () => {
-      // include both "agent" and "olimpya_agent"
       const agsSnap = await getDocs(
         query(collection(db, "users"), where("role", "in", ["agent", "olimpya_agent"]))
       );
       setAgents(agsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
 
-      const [bals, pays] = await Promise.all([getAllBalances(), getAllPayouts()]);
+      const [bals, pays]: [any[], any[]] = await Promise.all([getAllBalances(), getAllPayouts()]);
       setBalances(bals);
-      setPayouts(pays.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+      setPayouts(
+        (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      );
     })();
   }, [user, isManager, router]);
 
-  // Load unpaid for "by bookings" block
-  useEffect(() => {
-    if (!selAgentForBookings) {
-      setUnpaid([]);
-      setSelected(new Set());
-      return;
-    }
-    (async () => {
-      const snap = await getDocs(
-        query(
-          collection(db, "bookings"),
-          where("agentId", "==", selAgentForBookings),
-          where("status", "in", ["finished", "Завершено"]),
-          where("commissionPaid", "==", false)
-        )
-      );
-      setUnpaid(
-        snap.docs.map(d => {
-          const b = d.data() as any;
-          return {
-            id: d.id,
-            bookingNumber: b.bookingNumber || d.id,
-            createdAt: (b.createdAt as Timestamp).toDate() || new Date(),
-            hotel: b.hotel || "—",
-            tourists: Array.isArray(b.tourists) ? b.tourists.length : 0,
-            checkIn: b.checkIn || "—",
-            checkOut: b.checkOut || "—",
-            commission: Number(b.commission || 0),
-            commissionPaidAmount: Number(b.commissionPaidAmount || 0),
-          };
-        })
-      );
-      setSelected(new Set());
-    })();
-  }, [selAgentForBookings]);
+  /* --------------------- утилиты --------------------- */
+  const pct = AGENT_WITHHOLD_PCT ?? 0.12;
+  const toNet = (gross: number) => Math.max(0, Math.round(gross * (1 - pct) * 100) / 100);
 
-  const remaining = (b: Booking) =>
-    Math.max(0, b.commission - (b.commissionPaidAmount || 0));
+  // Маппер Firestore → Booking c попыткой восстановить paidGross из старых полей
+  const mapDocToBooking = (d: any): Booking => {
+    const b = d.data() as any;
+    const gross = Number(b.commission || 0);
+    const paidNet = Number(b.commissionPaidNetAmount ?? b.commissionPaidAmount ?? 0);
+    const paidGross =
+      b.commissionPaidGrossAmount != null
+        ? Number(b.commissionPaidGrossAmount)
+        : paidNet > 0
+        ? Math.round((paidNet / (1 - pct)) * 100) / 100
+        : 0;
 
-  // Total for by-bookings block
-  const totalByBooking = Array.from(selected).reduce((sum, id) => {
-    const b = unpaid.find(x => x.id === id);
-    return sum + (b ? remaining(b) : 0);
-  }, 0);
-
-  const handleCreateByBooking = async () => {
-    if (!selAgentForBookings || selected.size === 0) {
-      alert("Выберите агента и хотя бы одну бронь");
-      return;
-    }
-    setCreatingByBooking(true);
-    const res = await fetch("/api/create-payout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        agentId: selAgentForBookings,
-        bookings: Array.from(selected),
-      }),
-    });
-    if (res.ok) {
-      // refresh payouts & unpaid
-      const pays = await getAllPayouts();
-      setPayouts(pays.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
-      setSelAgentForBookings(prev => prev);
-      alert("Выплата создана");
-    } else {
-      const { error } = await res.json().catch(() => ({ error: "" }));
-      alert(`Ошибка: ${error || res.statusText}`);
-    }
-    setCreatingByBooking(false);
+    return {
+      id: d.id,
+      bookingNumber: b.bookingNumber || d.id,
+      createdAt: (b.createdAt as Timestamp)?.toDate?.() || new Date(),
+      hotel: b.hotel || "—",
+      tourists: Array.isArray(b.tourists) ? b.tourists.length : 0,
+      checkIn: b.checkIn || "—",
+      checkOut: b.checkOut || "—",
+      commissionGross: gross,
+      commissionNet: toNet(gross),
+      commissionPaidGrossAmount: paidGross,
+      commissionPaidNetAmount: paidNet,
+    };
   };
 
-  // Manual payout: select agent → load balance & unpaid
+  const remainingGross = (b: Booking) =>
+    Math.max(0, (b.commissionGross || 0) - (b.commissionPaidGrossAmount || 0));
+
+  /* ---------------- ручная выплата ---------------- */
   const handleManualAgentChange = async (agentId: string) => {
     setManualForm(f => ({ ...f, agentId }));
     const ag = balances.find(x => x.id === agentId);
     setManualBalance(ag?.balance ?? null);
+
+    setManualChecked(new Set());
+    setManualAmountsGross({});
+    setManualClose(new Set());
+    setTransferFee("");
+
     if (!agentId) {
       setManualUnpaid([]);
-      setManualChecked(new Set());
-      setManualAmounts({});
       return;
     }
     const snap = await getDocs(
@@ -180,125 +184,159 @@ export default function ManagerPayoutsPage() {
         where("commissionPaid", "==", false)
       )
     );
-    const list = snap.docs.map(d => {
-      const b = d.data() as any;
-      return {
-        id: d.id,
-        bookingNumber: b.bookingNumber || d.id,
-        createdAt: (b.createdAt as Timestamp).toDate() || new Date(),
-        hotel: b.hotel || "—",
-        tourists: Array.isArray(b.tourists) ? b.tourists.length : 0,
-        checkIn: b.checkIn || "—",
-        checkOut: b.checkOut || "—",
-        commission: Number(b.commission || 0),
-        commissionPaidAmount: Number(b.commissionPaidAmount || 0),
-      } as Booking;
-    });
-    setManualUnpaid(list);
-    setManualChecked(new Set());
-    setManualAmounts({});
+    setManualUnpaid(snap.docs.map(mapDocToBooking));
   };
 
-  const handleToggle = (id: string) => {
+  const toggleManualCheck = (id: string) => {
     setManualChecked(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else {
         next.add(id);
-        setManualAmounts(m => ({
-          ...m,
-          [id]: m[id] ?? remaining(manualUnpaid.find(b => b.id === id)!)!.toFixed(2),
-        }));
+        const b = manualUnpaid.find(x => x.id === id);
+        const remG = b ? remainingGross(b) : 0;
+        setManualAmountsGross(m => ({ ...m, [id]: m[id] ?? remG.toFixed(2) }));
       }
       return next;
     });
   };
 
-  const handleAmtChange = (id: string, val: string) => {
-    setManualAmounts(m => ({ ...m, [id]: val }));
+  const setGrossFor = (id: string, val: string) => {
+    setManualAmountsGross(m => ({ ...m, [id]: val }));
   };
 
-  const manualTotal = useMemo(() => {
+  const manualTotalGross = useMemo(() => {
     let sum = 0;
     manualChecked.forEach(id => {
       const b = manualUnpaid.find(x => x.id === id);
       if (!b) return;
-      const rem = remaining(b);
-      const n = parseFloat(manualAmounts[id] || "0");
+      const rem = remainingGross(b);
+      const n = parseFloat(manualAmountsGross[id] || "0");
       if (n > 0) sum += Math.min(n, rem);
     });
-    return sum;
-  }, [manualChecked, manualAmounts, manualUnpaid]);
+    return Math.round(sum * 100) / 100;
+  }, [manualChecked, manualAmountsGross, manualUnpaid]);
 
+  const manualTotalNet = useMemo(() => toNet(manualTotalGross), [manualTotalGross]);
+  const transferFeeNum = useMemo(() => Math.max(0, parseFloat(transferFee || "0") || 0), [transferFee]);
+  const toWire = useMemo(() => Math.max(0, manualTotalNet - transferFeeNum), [manualTotalNet, transferFeeNum]);
+
+  // Создание выплаты: по выбранным броням (брутто) или свободная сумма (брутто)
   const handleCreateManual = async () => {
     if (!manualForm.agentId) return;
+    setCreatingManual(true);
 
-    // if any bookings selected → partial
+    // Если выбраны брони
     if (manualChecked.size > 0) {
-      const items = Array.from(manualChecked)
-        .map(id => {
-          const b = manualUnpaid.find(x => x.id === id)!;
-          const rem = remaining(b);
-          const pay = Math.min(rem, parseFloat(manualAmounts[id] || "0"));
-          return pay > 0 ? { bookingId: id, amount: pay } : null;
-        })
-        .filter(Boolean);
+      const items: { bookingId: string; amountGross: number; closeFully?: boolean }[] =
+        Array.from(manualChecked)
+          .map(id => {
+            const b = manualUnpaid.find(x => x.id === id)!;
+            const remG = remainingGross(b);
+            const payG = Math.min(remG, parseFloat(manualAmountsGross[id] || "0"));
+            if (!(payG > 0)) return null;
+            return {
+              bookingId: id,
+              amountGross: Math.round(payG * 100) / 100,
+              closeFully: manualClose.has(id) || undefined,
+            };
+          })
+          .filter(Boolean) as any[];
 
       if (!items.length) {
         alert("Укажите суммы для выбранных броней");
+        setCreatingManual(false);
         return;
       }
-      setCreatingManual(true);
+
       const res = await fetch("/api/create-payout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode: "byBookings",
           agentId: manualForm.agentId,
-          items,
-          comment: manualForm.comment,
+          items,                // брутто по позициям
+          withholdPct: pct,     // сервер посчитает нетто
+          transferFee: transferFeeNum, // вычитается после удержания
+          comment: manualForm.comment, // попадёт в Anexa (общий комментарий выплаты)
         }),
       });
+
       if (res.ok) {
         const pays = await getAllPayouts();
-        setPayouts(pays.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+        setPayouts(
+          (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+        );
         await handleManualAgentChange(manualForm.agentId);
-        alert("Частичная выплата создана");
+        setManualForm(f => ({ ...f, amount: "", comment: f.comment }));
+        setTransferFee("");
+        alert("Выплата создана");
       } else {
         const { error } = await res.json().catch(() => ({ error: "" }));
         alert(`Ошибка: ${error || res.statusText}`);
       }
+
       setCreatingManual(false);
       return;
     }
 
-    // else free amount
+    // Свободная сумма (брутто)
     if (!manualForm.amount) {
       alert("Укажите сумму или выберите брони");
+      setCreatingManual(false);
       return;
     }
-    setCreatingManual(true);
-    await createSimplePayout(
-      manualForm.agentId,
-      parseFloat(manualForm.amount),
-      manualForm.comment
-    );
-    setManualForm({ agentId: manualForm.agentId, amount: "", comment: "" });
-    const pays = await getAllPayouts();
-    setPayouts(pays.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+
+    const res = await fetch("/api/create-payout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "free",
+        agentId: manualForm.agentId,
+        amountGross: parseFloat(manualForm.amount), // брутто
+        withholdPct: pct,
+        transferFee: transferFeeNum,
+        comment: manualForm.comment, // попадёт в Anexa
+      }),
+    });
+
+    if (res.ok) {
+      setManualForm({ agentId: manualForm.agentId, amount: "", comment: manualForm.comment });
+      setTransferFee("");
+      const pays = await getAllPayouts();
+      setPayouts(
+        (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      );
+      alert("Свободная выплата создана");
+    } else {
+      const { error } = await res.json().catch(() => ({ error: "" }));
+      alert(`Ошибка: ${error || res.statusText}`);
+    }
+
     setCreatingManual(false);
   };
 
-  // Delete payout
+  /* ------------------- удаление и анекса ------------------- */
+  // Удаляем через API, который возвращает баланс, но НЕ трогает отметки в booking'ах
   const handleDelete = async (id: string) => {
-    if (!confirm("Удалить выплату?")) return;
-    await deleteDoc(doc(db, "payouts", id));
-    const pays = await getAllPayouts();
-    setPayouts(pays.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+    if (!confirm("Удалить выплату? Баланс вернётся, отметки по броням останутся.")) return;
+    const r = await fetch("/api/delete-payout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payoutId: id }),
+    });
+    if (r.ok) {
+      const pays = await getAllPayouts();
+      setPayouts(
+        (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      );
+    } else {
+      alert("Ошибка удаления");
+    }
   };
 
-  // Generate annex
   const handleAnnex = async (id: string) => {
-    if (!confirm("Сгенерировать аннекс?")) return;
+    if (!confirm("Сгенерировать Anexa (с суммами БРУТТО)?")) return;
     const r = await fetch("/api/generate-annex", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -306,116 +344,290 @@ export default function ManagerPayoutsPage() {
     });
     if (r.ok) {
       const pays = await getAllPayouts();
-      setPayouts(pays.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
-    } else alert("Ошибка генерации аннекса");
+      setPayouts(
+        (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      );
+    } else alert("Ошибка генерации Anexa");
   };
 
-  // Filter existing payouts
+  /* ------------------- редактор выплаты ------------------- */
+  const openEditor = (p: Payout) => {
+    setEditing(p);
+    setEditTransferFee(
+      p.transferFee != null ? String(p.transferFee) : ""
+    );
+    setEditComment(p.comment || "");
+    setEditItems(
+      (p.items || []).map(it => ({
+        ...it,
+        amountGross: Number(it.amountGross || 0),
+        amountNet: toNet(Number(it.amountGross || 0)),
+      }))
+    );
+  };
+
+  const editTotalGross = useMemo(
+    () => Math.round(editItems.reduce((s, it) => s + (Number(it.amountGross) || 0), 0) * 100) / 100,
+    [editItems]
+  );
+  const editTotalNet = useMemo(() => toNet(editTotalGross), [editTotalGross]);
+  const editTransferFeeNum = useMemo(
+    () => Math.max(0, parseFloat(editTransferFee || "0") || 0),
+    [editTransferFee]
+  );
+  const editToWire = useMemo(
+    () => Math.max(0, editTotalNet - editTransferFeeNum),
+    [editTotalNet, editTransferFeeNum]
+  );
+
+  const setEditItemGross = (idx: number, val: string) => {
+    setEditItems(items =>
+      items.map((it, i) =>
+        i === idx
+          ? { ...it, amountGross: parseFloat(val || "0") || 0, amountNet: toNet(parseFloat(val || "0") || 0) }
+          : it
+      )
+    );
+  };
+
+  const toggleEditItemClose = (idx: number) => {
+    setEditItems(items =>
+      items.map((it, i) => (i === idx ? { ...it, closeFully: !it.closeFully } : it))
+    );
+  };
+
+  const saveEditor = async () => {
+    if (!editing) return;
+    const payload = {
+      payoutId: editing.id,
+      transferFee: editTransferFeeNum,
+      comment: editComment,
+      withholdPct: pct,
+      items: editItems.map(it => ({
+        bookingId: it.bookingId,
+        amountGross: Math.round((it.amountGross || 0) * 100) / 100,
+        closeFully: !!it.closeFully,
+      })),
+    };
+    const r = await fetch("/api/update-payout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (r.ok) {
+      setEditing(null);
+      const pays = await getAllPayouts();
+      setPayouts(
+        (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      );
+    } else {
+      const { error } = await r.json().catch(() => ({ error: "" }));
+      alert(`Ошибка сохранения: ${error || r.statusText}`);
+    }
+  };
+
+  /* ------------------- фильтр выплат ------------------- */
   const filteredPayouts = payouts.filter(p => {
     if (filters.agentId !== "all" && p.agentId !== filters.agentId) return false;
-    const d = p.createdAt?.toDate() ?? null;
-    if (filters.from && d < parseISO(filters.from)) return false;
-    if (filters.to && d > parseISO(filters.to)) return false;
+    const d = p.createdAt?.toDate?.() ?? null;
+    if (filters.from && d && d < parseISO(filters.from)) return false;
+    if (filters.to && d && d > parseISO(filters.to)) return false;
     const amt = p.amount || 0;
     if (filters.min && amt < +filters.min) return false;
     if (filters.max && amt > +filters.max) return false;
+    if (filterComment && !(p.comment || "").toLowerCase().includes(filterComment.toLowerCase()))
+      return false;
+    if (filterHasAnnex === "with" && !p.annexLink) return false;
+    if (filterHasAnnex === "without" && p.annexLink) return false;
     return true;
   });
 
+  /* ===================================================== */
   return (
-    <ManagerLayout>
-      {/* 1. By bookings */}
-      <Card>
-        <CardContent className="space-y-4">
-          <h2 className="text-xl font-bold">Выплата по бронированиям</h2>
-          <label className="block mb-1 text-sm font-medium">Агент</label>
-          <select
-            value={selAgentForBookings}
-            onChange={e => setSelAgentForBookings(e.target.value)}
-            className="border p-2 rounded w-full sm:w-80"
-          >
-            <option value="">— выберите агента —</option>
-            {agents.map(a => (
-              <option key={a.id} value={a.id}>
-                {a.agencyName} — {a.agentName}
-              </option>
-            ))}
-          </select>
-          {selAgentForBookings && (
-            <>
-              <h3 className="font-medium">Невыплаченные брони</h3>
-              {unpaid.length === 0 ? (
-                <p className="text-sm text-gray-600">У этого агента всё выплачено.</p>
-              ) : (
-                <table className="w-full border text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="w-8" />
-                      <th>Номер</th>
-                      <th>Дата</th>
-                      <th>Отель</th>
-                      <th>Туристы</th>
-                      <th>Check-in</th>
-                      <th>Check-out</th>
-                      <th className="text-right">Остаток, €</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {unpaid.map(b => (
-                      <tr key={b.id} className="border-t hover:bg-gray-50">
-                        <td className="text-center">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(b.id)}
-                            onChange={() => {
-                              const nxt = new Set(selected);
-                              nxt.has(b.id) ? nxt.delete(b.id) : nxt.add(b.id);
-                              setSelected(nxt);
-                            }}
-                          />
-                        </td>
-                        <td>{b.bookingNumber}</td>
-                        <td>{format(b.createdAt, "dd.MM.yyyy")}</td>
-                        <td>{b.hotel}</td>
-                        <td>{b.tourists}</td>
-                        <td>{b.checkIn}</td>
-                        <td>{b.checkOut}</td>
-                        <td className="text-right">{remaining(b).toFixed(2)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-              {selected.size > 0 && (
-                <p className="text-sm">
-                  Выбрано <strong>{selected.size}</strong> броней. Итого{" "}
-                  <strong>{totalByBooking.toFixed(2)} €</strong>
-                </p>
-              )}
-              <Button
-                onClick={handleCreateByBooking}
-                disabled={creatingByBooking || selected.size === 0}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                {creatingByBooking ? "Сохраняем…" : "Создать выплату"}
-              </Button>
-            </>
-          )}
-        </CardContent>
-      </Card>
+    <>
+      <Head>
+        <title>Выплаты агентам — CrocusCRM</title>
+      </Head>
+      <ManagerLayout>
+        {/* Ручная выплата */}
+        <Card>
+          <CardContent className="space-y-4">
+            <h2 className="text-xl font-bold">Ручная выплата</h2>
+            <p className="text-sm text-neutral-600">
+              Суммы в таблице — <b>БРУТТО</b>. Выплата сохраняет брутто и рассчитанное
+              нетто (удержание {Math.round(pct * 100)}%). Комиссия перевода вычитается из
+              итоговой суммы после удержания. В Anexa выгружаем <b>брутто</b>.
+            </p>
 
-      {/* 2. Manual payout */}
-      <Card>
-        <CardContent className="space-y-4">
-          <h2 className="text-xl font-bold">Ручная выплата</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
-            <div>
-              <label className="text-sm">Агент</label>
-              <Select value={manualForm.agentId} onValueChange={handleManualAgentChange}>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
+              <div>
+                <label className="text-sm">Агент</label>
+                <Select value={manualForm.agentId} onValueChange={handleManualAgentChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Выберите" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {agents.map(a => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.agencyName} — {a.agentName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {manualBalance !== null && (
+                  <p className="text-sm mt-1 text-neutral-600">
+                    Баланс: <strong>{manualBalance.toFixed(2)} €</strong>
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="text-sm">Свободная сумма (брутто), €</label>
+                <Input
+                  type="number"
+                  min="0"
+                  placeholder="Если не выбираете брони"
+                  value={manualForm.amount}
+                  onChange={e => setManualForm(f => ({ ...f, amount: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-sm">Комиссия перевода, €</label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="SWIFT / банк"
+                  value={transferFee}
+                  onChange={e => setTransferFee(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-sm">Комментарий</label>
+                <Input
+                  value={manualForm.comment}
+                  onChange={e => setManualForm(f => ({ ...f, comment: e.target.value }))}
+                />
+                <p className="text-xs text-neutral-500 mt-1">
+                  Для свободной суммы попадёт в Anexa. Для броней — комментарий выплаты.
+                </p>
+              </div>
+            </div>
+
+            {manualForm.agentId && (
+              <>
+                <h3 className="font-medium">Невыплаченные брони выбранного агента</h3>
+                {manualUnpaid.length === 0 ? (
+                  <p className="text-sm text-gray-600">У этого агента всё выплачено.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full border text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="w-8" />
+                          <th>Номер</th>
+                          <th>Дата</th>
+                          <th>Отель</th>
+                          <th>Туристы</th>
+                          <th>Check-in</th>
+                          <th>Check-out</th>
+                          <th className="text-right">Остаток (брутто), €</th>
+                          <th className="text-right">Создать выплату (брутто), €</th>
+                          <th>Закрыть полностью</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {manualUnpaid.map(b => {
+                          const remG = remainingGross(b);
+                          const checked = manualChecked.has(b.id);
+                          const val = manualAmountsGross[b.id] ?? remG.toFixed(2);
+                          const closed = manualClose.has(b.id);
+                          return (
+                            <tr key={b.id} className="border-t hover:bg-gray-50">
+                              <td className="text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleManualCheck(b.id)}
+                                />
+                              </td>
+                              <td>{b.bookingNumber}</td>
+                              <td>{format(b.createdAt, "dd.MM.yyyy")}</td>
+                              <td>{b.hotel}</td>
+                              <td>{b.tourists}</td>
+                              <td>{b.checkIn}</td>
+                              <td>{b.checkOut}</td>
+                              <td className="text-right">{remG.toFixed(2)}</td>
+                              <td className="text-right">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  disabled={!checked}
+                                  value={val}
+                                  onChange={e => setGrossFor(b.id, e.target.value)}
+                                  className="border rounded px-2 py-1 w-28 text-right"
+                                />
+                              </td>
+                              <td className="text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={closed}
+                                  disabled={!checked}
+                                  onChange={() =>
+                                    setManualClose(prev => {
+                                      const next = new Set(prev);
+                                      next.has(b.id) ? next.delete(b.id) : next.add(b.id);
+                                      return next;
+                                    })
+                                  }
+                                  title="Отметить бронь как полностью выплаченную (закрыть)"
+                                />
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+
+                    {manualChecked.size > 0 && (
+                      <p className="text-sm mt-2">
+                        Выбрано <strong>{manualChecked.size}</strong> броней. Итого БРУТТО{" "}
+                        <strong>{manualTotalGross.toFixed(2)} €</strong>. Итого НЕТТО{" "}
+                        <strong>{manualTotalNet.toFixed(2)} €</strong>. Комиссия перевода:{" "}
+                        <strong>{transferFeeNum.toFixed(2)} €</strong>. К перечислению:{" "}
+                        <strong>{toWire.toFixed(2)} €</strong>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            <Button
+              onClick={handleCreateManual}
+              disabled={creatingManual || !manualForm.agentId}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {creatingManual ? "Сохраняем…" : "Сделать выплату"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Все выплаты */}
+        <Card>
+          <CardContent className="space-y-4">
+            <h2 className="text-xl font-bold">Все выплаты</h2>
+
+            <div className="grid grid-cols-1 sm:grid-cols-8 gap-3">
+              <Select
+                value={filters.agentId}
+                onValueChange={v => setFilters(f => ({ ...f, agentId: v }))}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Выберите" />
+                  <SelectValue placeholder="Агент" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="all">Все агенты</SelectItem>
                   {agents.map(a => (
                     <SelectItem key={a.id} value={a.id}>
                       {a.agencyName} — {a.agentName}
@@ -423,205 +635,211 @@ export default function ManagerPayoutsPage() {
                   ))}
                 </SelectContent>
               </Select>
-              {manualBalance !== null && (
-                <p className="text-sm mt-1 text-neutral-600">
-                  Баланс: <strong>{manualBalance.toFixed(2)} €</strong>
-                </p>
-              )}
-            </div>
-            <div>
-              <label className="text-sm">Свободная сумма (€)</label>
+              <Input
+                type="date"
+                value={filters.from}
+                onChange={e => setFilters(f => ({ ...f, from: e.target.value }))}
+              />
+              <Input
+                type="date"
+                value={filters.to}
+                onChange={e => setFilters(f => ({ ...f, to: e.target.value }))}
+              />
               <Input
                 type="number"
-                min="0"
-                placeholder="Если не выбираете брони"
-                value={manualForm.amount}
-                onChange={e => setManualForm(f => ({ ...f, amount: e.target.value }))}
+                placeholder="мин € (факт)"
+                value={filters.min}
+                onChange={e => setFilters(f => ({ ...f, min: e.target.value }))}
               />
-            </div>
-            <div>
-              <label className="text-sm">Комментарий</label>
               <Input
-                value={manualForm.comment}
-                onChange={e => setManualForm(f => ({ ...f, comment: e.target.value }))}
+                type="number"
+                placeholder="макс € (факт)"
+                value={filters.max}
+                onChange={e => setFilters(f => ({ ...f, max: e.target.value }))}
               />
+              <Input
+                placeholder="Комментарий содержит…"
+                value={filterComment}
+                onChange={e => setFilterComment(e.target.value)}
+              />
+              <Select value={filterHasAnnex} onValueChange={v => setFilterHasAnnex(v as any)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Anexa" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Любые</SelectItem>
+                  <SelectItem value="with">С anexa</SelectItem>
+                  <SelectItem value="without">Без anexa</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </div>
 
-          {manualForm.agentId && (
-            <>
-              <h3 className="font-medium">Невыплаченные брони выбранного агента</h3>
-              {manualUnpaid.length === 0 ? (
-                <p className="text-sm text-gray-600">У этого агента всё выплачено.</p>
-              ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border text-sm">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="px-2 py-1 border">Дата</th>
+                    <th className="px-2 py-1 border">Агент</th>
+                    <th className="px-2 py-1 border text-right">Итого брутто (€)</th>
+                    <th className="px-2 py-1 border text-right">Итого нетто (€)</th>
+                    <th className="px-2 py-1 border text-right">Комиссия перевода (€)</th>
+                    <th className="px-2 py-1 border text-right">К перечислению (факт, €)</th>
+                    <th className="px-2 py-1 border">Комментарий</th>
+                    <th className="px-2 py-1 border">Anexa</th>
+                    <th className="px-2 py-1 border">Действия</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPayouts.map((p: Payout) => (
+                    <tr key={p.id} className="border-t align-top">
+                      <td className="px-2 py-1 border whitespace-nowrap">
+                        {p.createdAt?.toDate
+                          ? format(p.createdAt.toDate(), "dd.MM.yyyy")
+                          : "—"}
+                      </td>
+                      <td className="px-2 py-1 border">
+                        {(() => {
+                          const ag = agents.find(a => a.id === p.agentId);
+                          return ag ? `${ag.agencyName} — ${ag.agentName}` : "—";
+                        })()}
+                      </td>
+                      <td className="px-2 py-1 border text-right">
+                        {typeof p.totalGross === "number" ? p.totalGross.toFixed(2) : "—"}
+                      </td>
+                      <td className="px-2 py-1 border text-right">
+                        {typeof p.totalNet === "number" ? p.totalNet.toFixed(2) : "—"}
+                      </td>
+                      <td className="px-2 py-1 border text-right">
+                        {typeof p.transferFee === "number" ? p.transferFee.toFixed(2) : "—"}
+                      </td>
+                      <td className="px-2 py-1 border text-right">
+                        {typeof p.amount === "number" ? p.amount.toFixed(2) : "—"}
+                      </td>
+                      <td className="px-2 py-1 border">
+                        {p.comment || "—"}
+                      </td>
+                      <td className="px-2 py-1 border text-center">
+                        {p.annexLink ? (
+                          <a
+                            href={p.annexLink}
+                            target="_blank"
+                            className="underline text-sky-600"
+                            rel="noreferrer"
+                          >
+                            FILE
+                          </a>
+                        ) : (
+                          <Button size="sm" variant="outline" onClick={() => handleAnnex(p.id)}>
+                            Создать
+                          </Button>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 border text-center space-x-2">
+                        <Button size="sm" variant="outline" onClick={() => openEditor(p)}>
+                          Ред.
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => handleDelete(p.id)}>
+                          Удалить
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Редактор выбранной выплаты */}
+            {editing && (
+              <div className="mt-4 border rounded-md p-4 bg-white">
+                <h3 className="text-lg font-semibold mb-2">Редактор выплаты</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-3">
+                  <div>
+                    <label className="text-sm">Комиссия перевода, €</label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={editTransferFee}
+                      onChange={e => setEditTransferFee(e.target.value)}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-sm">Комментарий</label>
+                    <Input
+                      value={editComment}
+                      onChange={e => setEditComment(e.target.value)}
+                    />
+                  </div>
+                </div>
+
                 <div className="overflow-x-auto">
                   <table className="w-full border text-sm">
                     <thead className="bg-gray-100">
                       <tr>
-                        <th className="w-8" />
-                        <th>Номер</th>
-                        <th>Дата</th>
-                        <th>Отель</th>
-                        <th>Остаток, €</th>
-                        <th>Выплатить, €</th>
+                        <th className="px-2 py-1 border">Номер</th>
+                        <th className="px-2 py-1 border">Отель</th>
+                        <th className="px-2 py-1 border">Check-in</th>
+                        <th className="px-2 py-1 border">Check-out</th>
+                        <th className="px-2 py-1 border text-right">Брутто (€)</th>
+                        <th className="px-2 py-1 border text-right">Нетто (€)</th>
+                        <th className="px-2 py-1 border">Закрыть полностью</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {manualUnpaid.map(b => {
-                        const rem = remaining(b);
-                        const checked = manualChecked.has(b.id);
-                        const val = manualAmounts[b.id] ?? rem.toFixed(2);
-                        return (
-                          <tr key={b.id} className="border-t hover:bg-gray-50">
-                            <td className="text-center">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => handleToggle(b.id)}
-                              />
-                            </td>
-                            <td>{b.bookingNumber}</td>
-                            <td>{format(b.createdAt, "dd.MM.yyyy")}</td>
-                            <td>{b.hotel}</td>
-                            <td className="text-right">{rem.toFixed(2)}</td>
-                            <td className="text-right">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                disabled={!checked}
-                                value={val}
-                                onChange={e => handleAmtChange(b.id, e.target.value)}
-                                className="border rounded px-2 py-1 w-28 text-right"
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {editItems.map((it, idx) => (
+                        <tr key={it.bookingId} className="border-t">
+                          <td className="px-2 py-1 border">{it.bookingNumber || it.bookingId}</td>
+                          <td className="px-2 py-1 border">{it.hotel || "—"}</td>
+                          <td className="px-2 py-1 border">{it.checkIn || "—"}</td>
+                          <td className="px-2 py-1 border">{it.checkOut || "—"}</td>
+                          <td className="px-2 py-1 border text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={String(it.amountGross ?? 0)}
+                              onChange={e => setEditItemGross(idx, e.target.value)}
+                              className="border rounded px-2 py-1 w-28 text-right"
+                            />
+                          </td>
+                          <td className="px-2 py-1 border text-right">
+                            {(it.amountNet ?? 0).toFixed(2)}
+                          </td>
+                          <td className="px-2 py-1 border text-center">
+                            <input
+                              type="checkbox"
+                              checked={!!it.closeFully}
+                              onChange={() => toggleEditItemClose(idx)}
+                            />
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
-                  {manualChecked.size > 0 && (
-                    <p className="text-sm mt-2">
-                      Выбрано <strong>{manualChecked.size}</strong> броней. Итого к выплате{" "}
-                      <strong>{manualTotal.toFixed(2)} €</strong>
-                    </p>
-                  )}
                 </div>
-              )}
-            </>
-          )}
 
-          <Button
-            onClick={handleCreateManual}
-            disabled={creatingManual || !manualForm.agentId}
-            className="bg-green-600 hover:bg-green-700"
-          >
-            {creatingManual ? "Сохраняем…" : "Сделать выплату"}
-          </Button>
-        </CardContent>
-      </Card>
+                <div className="mt-2 text-sm">
+                  <p>
+                    Итого БРУТТО: <b>{editTotalGross.toFixed(2)} €</b> · Итого НЕТТО:{" "}
+                    <b>{editTotalNet.toFixed(2)} €</b> · Комиссия перевода:{" "}
+                    <b>{editTransferFeeNum.toFixed(2)} €</b> · К перечислению:{" "}
+                    <b>{editToWire.toFixed(2)} €</b>
+                  </p>
+                </div>
 
-      {/* 3. All payouts */}
-      <Card>
-        <CardContent className="space-y-4">
-          <h2 className="text-xl font-bold">Все выплаты</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-            <Select
-              value={filters.agentId}
-              onValueChange={v => setFilters(f => ({ ...f, agentId: v }))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Агент" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Все агенты</SelectItem>
-                {agents.map(a => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.agencyName} — {a.agentName}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Input
-              type="date"
-              value={filters.from}
-              onChange={e => setFilters(f => ({ ...f, from: e.target.value }))}
-            />
-            <Input
-              type="date"
-              value={filters.to}
-              onChange={e => setFilters(f => ({ ...f, to: e.target.value }))}
-            />
-            <Input
-              type="number"
-              placeholder="мин €"
-              value={filters.min}
-              onChange={e => setFilters(f => ({ ...f, min: e.target.value }))}
-            />
-            <Input
-              type="number"
-              placeholder="макс €"
-              value={filters.max}
-              onChange={e => setFilters(f => ({ ...f, max: e.target.value }))}
-            />
-          </div>
-          <table className="w-full border text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="px-2 py-1 border">Дата</th>
-                <th className="px-2 py-1 border">Агент</th>
-                <th className="px-2 py-1 border text-right">Сумма (€)</th>
-                <th className="px-2 py-1 border">Комментарий</th>
-                <th className="px-2 py-1 border">Anexa</th>
-                <th className="px-2 py-1 border">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredPayouts.map(p => (
-                <tr key={p.id} className="border-t">
-                  <td className="px-2 py-1 border whitespace-nowrap">
-                    {p.createdAt?.toDate
-                      ? format(p.createdAt.toDate(), "dd.MM.yyyy")
-                      : "—"}
-                  </td>
-                 <td className="px-2 py-1 border">
-   {(() => {
-    const ag = agents.find(a => a.id === p.agentId);
-    return ag 
-      ? `${ag.agencyName} — ${ag.agentName}` 
-      : "—";
-  })()}
-</td>
-                  <td className="px-2 py-1 border text-right">
-                    {p.amount?.toFixed(2) || "—"}
-                  </td>
-                  <td className="px-2 py-1 border">{p.comment || "—"}</td>
-                  <td className="px-2 py-1 border text-center">
-                    {p.annexLink ? (
-                      <a
-                        href={p.annexLink}
-                        target="_blank"
-                        className="underline text-sky-600"
-                      >
-                        FILE
-                      </a>
-                    ) : (
-                      <Button size="sm" variant="outline" onClick={() => handleAnnex(p.id)}>
-                        Создать
-                      </Button>
-                    )}
-                  </td>
-                  <td className="px-2 py-1 border text-center">
-                    <Button size="sm" variant="destructive" onClick={() => handleDelete(p.id)}>
-                      Удалить
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
-    </ManagerLayout>
+                <div className="mt-3 space-x-2">
+                  <Button onClick={saveEditor} className="bg-green-600 hover:bg-green-700">
+                    Сохранить изменения
+                  </Button>
+                  <Button variant="outline" onClick={() => setEditing(null)}>
+                    Отмена
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </ManagerLayout>
+    </>
   );
 }

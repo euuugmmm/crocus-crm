@@ -1,20 +1,33 @@
 // pages/api/create-payout.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getApps, initializeApp, cert } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getApps, initializeApp, cert, App } from "firebase-admin/app";
+import { getFirestore, FieldValue, Firestore } from "firebase-admin/firestore";
+
+/* ───────────────── helpers ───────────────── */
 
 function getCred(plain: string, b64: string) {
   if (process.env[plain]) return JSON.parse(process.env[plain]!);
   if (process.env[b64])
-    return JSON.parse(
-      Buffer.from(process.env[b64]!, "base64").toString("utf8")
-    );
+    return JSON.parse(Buffer.from(process.env[b64]!, "base64").toString("utf8"));
   throw new Error(`Neither ${plain} nor ${b64} set`);
 }
 
-// Инициализируем Admin SDK один раз
+const num = (v: any, d = 0) => {
+  const n = typeof v === "number" ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : d;
+};
+
+const round2 = (x: number) => Math.round(x * 100) / 100;
+
+/** Удаляем undefined-поля, чтобы Firestore не ругался */
+const prune = <T extends Record<string, any>>(o: T): T =>
+  Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
+
+/* ───────────────── firebase admin (singleton) ───────────────── */
+
+let app: App;
 if (!getApps().length) {
-  initializeApp({
+  app = initializeApp({
     credential: cert(
       getCred(
         "FIREBASE_SERVICE_ACCOUNT_JSON",
@@ -22,15 +35,20 @@ if (!getApps().length) {
       )
     ),
   });
+} else {
+  app = getApps()[0]!;
 }
+const db: Firestore = getFirestore(app);
 
-const db = getFirestore();
+/* ───────────────── config (по умолчанию) ─────────────────
+   AGENT_TAX_PCT — доля удержания из комиссии (например, 0.12 = 12%)
+---------------------------------------------------------------- */
+const DEFAULT_TAX_PCT = (() => {
+  const v = parseFloat(process.env.AGENT_TAX_PCT || "");
+  return Number.isFinite(v) ? v : 0.12;
+})();
 
-// Безопасно получить число
-const num = (v: any, d = 0) => {
-  const n = typeof v === "number" ? v : parseFloat(v);
-  return Number.isFinite(n) ? n : d;
-};
+/* ───────────────── handler ───────────────── */
 
 export default async function handler(
   req: NextApiRequest,
@@ -42,100 +60,151 @@ export default async function handler(
   }
 
   try {
-    const { agentId, bookings, items, comment } = req.body as {
+    const {
+      agentId,
+      bookings, // старый режим: ["bookingId1", "bookingId2"]
+      items,    // новый режим: [{ bookingId, amount, closeFully? }]
+      comment,
+      taxPct,         // опционально переопределить % удержания (0..0.5)
+      transferFee,    // опциональная фикс. комиссия (SWIFT и т.п.), списывается с нетто
+      annexNote,      // опциональная заметка для аннекса (если не задана — возьмём comment)
+    }: {
       agentId?: string;
-      bookings?: string[];                // старый режим
-      items?: { bookingId: string; amount: number }[]; // новый режим
+      bookings?: string[];
+      items?: { bookingId: string; amount: number; closeFully?: boolean }[];
       comment?: string;
-    };
+      taxPct?: number;
+      transferFee?: number;
+      annexNote?: string;
+    } = req.body || {};
 
     if (!agentId) {
       return res.status(400).json({ error: "agentId is required" });
     }
 
+    const _taxPct = Math.min(Math.max(num(taxPct, DEFAULT_TAX_PCT), 0), 0.5);
+    const _transferFee = round2(Math.max(0, num(transferFee, 0)));
+    const _comment = comment || "";
+    const _annexNote = annexNote || _comment;
+
     /****************************************************************
-     * НОВЫЙ РЕЖИМ: частичные выплаты по items[{bookingId, amount}]
+     * НОВЫЙ РЕЖИМ: частичные выплаты по items[{bookingId, amount, closeFully?}]
      ****************************************************************/
     if (Array.isArray(items) && items.length > 0) {
-      // Загружаем заявки
+      // Загружаем заявки пачкой
       const snaps = await Promise.all(
         items.map((it) => db.doc(`bookings/${it.bookingId}`).get())
       );
 
-      const updates: {
+      type Upd = {
         bookingId: string;
-        pay: number;
-        beforePaid: number;
-        afterPaid: number;
-        commission: number;
-      }[] = [];
+        payGross: number;
+        beforePaidGross: number;
+        afterPaidGross: number;
+        commissionGross: number;
+        closeFully?: boolean;
+        fullyPaidFlag: boolean;
+      };
 
-      let totalAmount = 0;
+      const updates: Upd[] = [];
+      let totalGross = 0;
 
       for (let i = 0; i < items.length; i++) {
         const snap = snaps[i];
         if (!snap.exists) continue;
 
+        const incoming = items[i];
         const data = snap.data() as any;
-        const commission = num(data.commission, 0);
-        const alreadyPaid = num(data.commissionPaidAmount, 0);
-        const remaining = Math.max(0, commission - alreadyPaid);
 
-        // Сколько хотим заплатить
-        const desired = Math.max(0, num(items[i].amount, 0));
-        const pay = Math.min(remaining, desired);
+        const commissionGross = num(data.commission, 0);            // брутто-комиссия по брони
+        const alreadyPaidGross = num(data.commissionPaidAmount, 0); // брутто уже выплачено
+        const remaining = Math.max(0, commissionGross - alreadyPaidGross);
 
-        if (pay <= 0) continue;
+        const desired = Math.max(0, num(incoming.amount, 0));       // сколько хотим выплатить (брутто)
+        const payGross = Math.min(remaining, desired);
+
+        const closeFully =
+          typeof incoming.closeFully === "boolean" ? incoming.closeFully : undefined;
+
+        // если нечего платить и не просили закрыть полностью — пропускаем
+        if (payGross <= 0 && !closeFully) continue;
+
+        const beforePaidGross = alreadyPaidGross;
+        const afterPaidGross = round2(alreadyPaidGross + payGross);
+
+        const fullyPaidFlag =
+          closeFully === true ? true : afterPaidGross >= commissionGross - 0.01;
 
         updates.push({
-          bookingId: items[i].bookingId,
-          pay,
-          beforePaid: alreadyPaid,
-          afterPaid: alreadyPaid + pay,
-          commission,
+          bookingId: incoming.bookingId,
+          payGross,
+          beforePaidGross,
+          afterPaidGross,
+          commissionGross,
+          closeFully,
+          fullyPaidFlag,
         });
 
-        totalAmount += pay;
+        totalGross += payGross;
       }
 
       if (updates.length === 0) {
-        return res
-          .status(400)
-          .json({ error: "No payable items (amounts are zero or exceeded remaining)" });
+        return res.status(400).json({
+          error:
+            "No payable items (amounts are zero or exceeded remaining, and no closeFully flags)",
+        });
       }
 
-      // Создаём payout документ
-      const payoutRef = await db.collection("payouts").add({
-        agentId,
-        amount: totalAmount,
-        comment: comment || "",
-        // детализация выплат по броням
-        items: updates.map((u) => ({
-          bookingId: u.bookingId,
-          amount: u.pay,
-          beforePaid: u.beforePaid,
-          afterPaid: u.afterPaid,
-          commission: u.commission,
-        })),
-        createdAt: FieldValue.serverTimestamp(),
-      });
+      // Итоги выплаты
+      const taxWithheld = round2(totalGross * _taxPct);                  // удержанный налог с брутто
+      const amountNet = round2(totalGross - taxWithheld - _transferFee); // к перечислению
 
-      // Обновляем заявки батчем
+      // payout документ
+      const payoutRef = await db.collection("payouts").add(
+        prune({
+          agentId,
+          amount: totalGross,            // legacy: брутто
+          amountGross: totalGross,       // брутто
+          amountNet,                     // нетто к перечислению
+          taxWithheld,                   // удержано налога
+          taxPct: _taxPct,               // ставка
+          transferFee: _transferFee,     // комиссия за перевод
+          comment: _comment,
+          annexNote: _annexNote,
+          items: updates.map((u) =>
+            prune({
+              bookingId: u.bookingId,
+              amountGross: u.payGross,
+              amountNet: round2(u.payGross - u.payGross * _taxPct), // нетто по позиции (без transferFee)
+              beforePaidGross: u.beforePaidGross,
+              afterPaidGross: u.afterPaidGross,
+              commissionGross: u.commissionGross,
+              closeFully: typeof u.closeFully === "boolean" ? u.closeFully : undefined,
+              fullyPaid: u.fullyPaidFlag,
+            })
+          ),
+          createdAt: FieldValue.serverTimestamp(),
+        })
+      );
+
+      // Обновляем брони батчем (брутто-счётчики)
       const batch = db.batch();
       updates.forEach((u) => {
-        const ref = db.doc(`bookings/${u.bookingId}`);
-        const fullyPaid = u.afterPaid >= u.commission - 0.01; // допускаем копейки
-        batch.update(ref, {
-          commissionPaidAmount: FieldValue.increment(u.pay),
-          commissionPaid: fullyPaid,
+        batch.update(db.doc(`bookings/${u.bookingId}`), prune({
+          commissionPaidAmount: FieldValue.increment(u.payGross),
+          commissionPaid: u.fullyPaidFlag,
           payoutId: payoutRef.id,
-        });
+        }));
       });
       await batch.commit();
 
-      return res
-        .status(200)
-        .json({ payoutId: payoutRef.id, amount: totalAmount, items: updates.length });
+      return res.status(200).json({
+        payoutId: payoutRef.id,
+        amountGross: totalGross,
+        amountNet,
+        taxWithheld,
+        items: updates.length,
+      });
     }
 
     /****************************************************************
@@ -150,68 +219,87 @@ export default async function handler(
     const snapsOld = await Promise.all(
       bookings.map((id) => db.doc(`bookings/${id}`).get())
     );
-    const updatesOld: {
-      bookingId: string;
-      pay: number;
-      beforePaid: number;
-      afterPaid: number;
-      commission: number;
-    }[] = [];
-    let totalAmountOld = 0;
 
-    for (let i = 0; i < snapsOld.length; i++) {
-      const snap = snapsOld[i];
+    type UpdOld = {
+      bookingId: string;
+      payGross: number;
+      beforePaidGross: number;
+      afterPaidGross: number;
+      commissionGross: number;
+    };
+
+    const updatesOld: UpdOld[] = [];
+    let totalGrossOld = 0;
+
+    for (const snap of snapsOld) {
       if (!snap.exists) continue;
       const data = snap.data() as any;
-      const commission = num(data.commission, 0);
-      const alreadyPaid = num(data.commissionPaidAmount, 0);
-      const remaining = Math.max(0, commission - alreadyPaid);
+      const commissionGross = num(data.commission, 0);
+      const alreadyPaidGross = num(data.commissionPaidAmount, 0);
+      const remaining = Math.max(0, commissionGross - alreadyPaidGross);
 
       if (remaining <= 0) continue;
 
       updatesOld.push({
         bookingId: snap.id,
-        pay: remaining,
-        beforePaid: alreadyPaid,
-        afterPaid: alreadyPaid + remaining,
-        commission,
+        payGross: remaining,
+        beforePaidGross: alreadyPaidGross,
+        afterPaidGross: round2(alreadyPaidGross + remaining),
+        commissionGross,
       });
-      totalAmountOld += remaining;
+      totalGrossOld += remaining;
     }
 
     if (updatesOld.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "Nothing to pay (no remaining commissions)" });
+      return res.status(400).json({ error: "Nothing to pay (no remaining commissions)" });
     }
 
-    const payoutRefOld = await db.collection("payouts").add({
-      agentId,
-      amount: totalAmountOld,
-      comment: comment || "",
-      items: updatesOld.map((u) => ({
-        bookingId: u.bookingId,
-        amount: u.pay,
-        beforePaid: u.beforePaid,
-        afterPaid: u.afterPaid,
-        commission: u.commission,
-      })),
-      createdAt: FieldValue.serverTimestamp(),
-    });
+    const taxWithheldOld = round2(totalGrossOld * _taxPct);
+    const amountNetOld = round2(totalGrossOld - taxWithheldOld - _transferFee);
+
+    const payoutRefOld = await db.collection("payouts").add(
+      prune({
+        agentId,
+        amount: totalGrossOld,
+        amountGross: totalGrossOld,
+        amountNet: amountNetOld,
+        taxWithheld: taxWithheldOld,
+        taxPct: _taxPct,
+        transferFee: _transferFee,
+        comment: _comment,
+        annexNote: _annexNote,
+        items: updatesOld.map((u) =>
+          prune({
+            bookingId: u.bookingId,
+            amountGross: u.payGross,
+            amountNet: round2(u.payGross - u.payGross * _taxPct),
+            beforePaidGross: u.beforePaidGross,
+            afterPaidGross: u.afterPaidGross,
+            commissionGross: u.commissionGross,
+            fullyPaid: true,
+          })
+        ),
+        createdAt: FieldValue.serverTimestamp(),
+      })
+    );
 
     const batchOld = db.batch();
     updatesOld.forEach((u) => {
       batchOld.update(db.doc(`bookings/${u.bookingId}`), {
-        commissionPaidAmount: FieldValue.increment(u.pay),
+        commissionPaidAmount: FieldValue.increment(u.payGross),
         commissionPaid: true,
         payoutId: payoutRefOld.id,
       });
     });
     await batchOld.commit();
 
-    return res
-      .status(200)
-      .json({ payoutId: payoutRefOld.id, amount: totalAmountOld, items: updatesOld.length });
+    return res.status(200).json({
+      payoutId: payoutRefOld.id,
+      amountGross: totalGrossOld,
+      amountNet: amountNetOld,
+      taxWithheld: taxWithheldOld,
+      items: updatesOld.length,
+    });
   } catch (e: any) {
     console.error("create-payout error:", e);
     return res.status(500).json({ error: e.message || "Internal error" });

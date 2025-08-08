@@ -8,12 +8,14 @@ import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import InputMask from "react-input-mask-next";
 import { OPERATORS } from "@/lib/constants/operators";
-import { 
+import {
   AGENT_CARD_PROC,
   CROCUS_CARD_PROC,
   TOCO_RO_FEE,
   TOCO_MD_FEE,
-  OTHER_AGENT_PCT
+  OTHER_AGENT_PCT,
+  AGENT_TAX_EXPENSE_PCT,
+  AGENT_WITHHOLD_PCT,
 } from "@/lib/constants/fees";
 
 import {
@@ -72,6 +74,13 @@ export interface BookingDTO {
   updatedAt?: string;
   agentStatus?: StatusKey;
   internalStatus?: StatusKey;
+  commissionWithholdPct?: number;      // 0.12
+  commissionWithholdAmount?: number;   // комиссия * 12%
+  commissionTaxExpensePct?: number;    // 0.10
+  commissionTaxExpenseAmount?: number; // комиссия * 10%
+  commissionNetToPay?: number;         // комиссия - 12%
+  commissionExtraIncome?: number;      // (12% - 10%) * комиссия
+
 
 }
 
@@ -171,6 +180,10 @@ const [internalStatus, setInternalStatus] = useState<StatusKey>(
   /* ───── вычисляемые стейты ───── */
   const [commission,     setCommission]    = useState<number>(initialData.commission ?? 0);
   const [commissionInput,setCommissionInput]=useState<string>("");               // ручная правка
+  const [commissionWithhold,    setCommissionWithhold]    = useState<number>(0);
+  const [commissionNetToPay,    setCommissionNetToPay]    = useState<number>(0);
+  const [commissionTaxExpense,  setCommissionTaxExpense]  = useState<number>(0);
+  const [commissionExtraIncome, setCommissionExtraIncome] = useState<number>(0);
   const [commissionBase, setCommissionBase] = useState<number>(0);
   const [crocusFee,      setCrocusFee]     = useState<number>(0);
   const [agentBankFee,   setAgentBankFee]  = useState<number>(initialData.agentBankFee  ?? 0);
@@ -180,6 +193,18 @@ const [internalStatus, setInternalStatus] = useState<StatusKey>(
   const [netToPay,       setNetToPay]      = useState<number>(0);
  
   const allowNet = OPERATORS.find(o => o.val === operator)?.allowNet ?? false;
+  
+  useEffect(() => {
+  const withhold = round2(commission * AGENT_WITHHOLD_PCT);
+  const taxExp   = round2(commission * AGENT_TAX_EXPENSE_PCT);
+  const netPay   = round2(commission - withhold);
+  const extra    = round2(withhold - taxExp); // те самые +2%
+
+  setCommissionWithhold(withhold);
+  setCommissionTaxExpense(taxExp);
+  setCommissionNetToPay(netPay);
+  setCommissionExtraIncome(extra);
+}, [commission]);
 
   /* ───── расчёты ───── */
   useEffect(() => {
@@ -268,19 +293,25 @@ useEffect(() => {
 
 
   /* ───── итоговые значения ───── */
-  const taxVal   = round2(commission * 0.10);  // 10% for display only
+  const taxExpense = commissionTaxExpense;
+
 const profit = payer === "agent"
   ? round2(
       (num(nettoOperator) - num(internalNet)) +
       crocusFee +
       (agentBankFee - crocusBankFee)
+      - taxExpense
+      + commissionExtraIncome
     )
   : round2(
       num(bruttoClient) -
       num(internalNet) -
       commission -
       crocusBankFee
+      - taxExpense
+      + commissionExtraIncome
     );
+
 
     
   /* ---------- работа с туристами ---------- */
@@ -314,6 +345,13 @@ const profit = payer === "agent"
       createdAt: initialData.createdAt ?? new Date().toISOString(),
       agentStatus,
       internalStatus,
+      commissionWithholdPct:   AGENT_WITHHOLD_PCT,
+      commissionWithholdAmount: commissionWithhold,
+      commissionTaxExpensePct: AGENT_TAX_EXPENSE_PCT,
+      commissionTaxExpenseAmount: commissionTaxExpense,
+      commissionNetToPay,             // сумма, которую реально платим агенту
+      commissionExtraIncome,          // +2% к доходу Crocus
+ 
 
     });
   };
@@ -655,28 +693,31 @@ const profit = payer === "agent"
 
 
       {/* ---- Summary ---- */}
-      <div className="p-3 bg-gray-50 border rounded text-sm space-y-1 mt-4">
-        <p><strong>Базовая комиссия:</strong> {commissionBase.toFixed(2)} €</p>
-        {crocusFee>0 && <p><strong>Сбор Crocus (TOCO):</strong> {crocusFee.toFixed(2)} €</p>}
-        {paymentMethod==="card" && (
-          <>
-            <p><strong>Банк. комиссия агента (1.8 %):</strong> {agentBankFee.toFixed(2)} €</p>
-            <p>
-              <strong>Банк. комиссия Crocus (1.5 %):</strong>{" "}
-              <input
-                type="number"
-                step="0.01"
-                value={crocusBankFee.toFixed(2)}
-                onChange={e=>setCrocusBankFee(num(e.target.value))}
-                className="w-24 inline-block border rounded p-1 ml-1"
-              /> €
-            </p>
-          </>
-        )}
-        <p><strong>Комиссия агента (фактическая):</strong> {commission.toFixed(2)} €</p>
-        <p><strong>Налог 10 % (не вычитаем):</strong> {taxVal.toFixed(2)} €</p>
-        <p><strong>Прибыль Crocus Tour:</strong> {profit.toFixed(2)} €</p>
-      </div>
+<div className="p-3 bg-gray-50 border rounded text-sm space-y-1 mt-4">
+  <p><strong>Базовая комиссия:</strong> {commissionBase.toFixed(2)} €</p>
+  {crocusFee>0 && <p><strong>Сбор Crocus (TOCO):</strong> {crocusFee.toFixed(2)} €</p>}
+  {paymentMethod==="card" && (
+    <>
+      <p><strong>Банк. комиссия агента (1.8 %):</strong> {agentBankFee.toFixed(2)} €</p>
+      <p>
+        <strong>Банк. комиссия Crocus (1.5 %):</strong>{" "}
+        <input
+          type="number"
+          step="0.01"
+          value={crocusBankFee.toFixed(2)}
+          onChange={e=>setCrocusBankFee(num(e.target.value))}
+          className="w-24 inline-block border rounded p-1 ml-1"
+        /> €
+      </p>
+    </>
+  )}
+  <p><strong>Комиссия агента (брутто):</strong> {commission.toFixed(2)} €</p>
+  <p><strong>Удержание при выплате (12%):</strong> {commissionWithhold.toFixed(2)} €</p>
+  <p><strong>К выплате агенту:</strong> {commissionNetToPay.toFixed(2)} €</p>
+  <p><strong>Налог (расход, 10%):</strong> {taxExpense.toFixed(2)} €</p>
+  <p><strong>Доп. доход Crocus (разница 2%):</strong> {commissionExtraIncome.toFixed(2)} €</p>
+  <p><strong>Прибыль Crocus Tour:</strong> {profit.toFixed(2)} €</p>
+</div>
 
 
       <button type="submit" className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">

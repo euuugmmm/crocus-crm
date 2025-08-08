@@ -102,7 +102,7 @@ export default function EditBookingPage() {
     });
 
     // уведомление агенту о смене статуса
-    if (oldData?.status !== data.status) {
+    if (oldData?.agentStatus !== data.agentStatus) {
       await fetch("/api/telegram/notify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -111,8 +111,8 @@ export default function EditBookingPage() {
           type: "statusChanged",
           data: {
             bookingNumber: oldData.bookingNumber,
-            oldStatus: oldData.status,
-            newStatus: data.status,
+            oldStatus: oldData.agentStatus,
+            newStatus: data.agentStatus,
           },
         }),
       }).catch(console.error);
@@ -134,7 +134,7 @@ export default function EditBookingPage() {
     });
 
     // вернуть статус брони на "new"
-    await updateDoc(doc(db, "bookings", id), { status: "new" });
+    await updateDoc(doc(db, "bookings", id), { agentStatus: "new" });
 
     // уведомить агента
     await fetch("/api/telegram/notify", {
@@ -197,7 +197,7 @@ export default function EditBookingPage() {
           <BookingFormManager
             initialData={booking}
             onSubmit={saveBooking}
-            isManager
+
             agentName={booking.agentName}
             agentAgency={booking.agentAgency}
           />
