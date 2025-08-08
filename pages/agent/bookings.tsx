@@ -15,7 +15,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Badge } from "@/components/ui/badge";
 import { useTranslation } from "next-i18next";
 import { serverSideTranslations } from "next-i18next/serverSideTranslations";
-import { STATUS_COLORS, AGENT_STATUS_KEYS as STATUS_KEYS, StatusKey } from "@/lib/constants/statuses";
+import { STATUS_COLORS, AGENT_STATUS_KEYS, StatusKey } from "@/lib/constants/statuses";
 import { fmtDate, toDate } from "@/lib/utils/dates";
 import { fixed2, toNumber } from "@/lib/utils/numbers";
 
@@ -34,6 +34,7 @@ type Booking = {
   bruttoClient?: number | string;
   commission?: number | string;
   status?: StatusKey | string;
+  agentStatus?: StatusKey | string;
   invoiceLink?: string;
   voucherLinks?: string[];
 };
@@ -48,6 +49,10 @@ const LEGACY_STATUS: Record<string, StatusKey> = {
   "Отменен": "cancelled",
 };
 
+function getAgentStatusKey(b: Booking): StatusKey {
+  const raw = (b.agentStatus ?? b.status ?? "new") as string;
+  return LEGACY_STATUS[raw] || (raw as StatusKey) || "new";
+}
 export default function AgentBookingsPage() {
   const router = useRouter();
   const { t } = useTranslation("common");
@@ -127,9 +132,8 @@ export default function AgentBookingsPage() {
             fixed2(b.commission) !== fixed2(filters.commission))
           return false;
 
-        const sk: StatusKey = LEGACY_STATUS[b.status as string] || (b.status as StatusKey) || "new";
+        const sk = getAgentStatusKey(b);
         if (filters.status !== "all" && sk !== (filters.status as StatusKey)) return false;
-
         return true;
       })
       .sort((a, b) => {
@@ -167,10 +171,10 @@ export default function AgentBookingsPage() {
           case "commission":
             aV = toNumber(a.commission); bV = toNumber(b.commission);
             break;
-          case "status":
-            aV = (LEGACY_STATUS[a.status as string] || a.status as string) || "";
-            bV = (LEGACY_STATUS[b.status as string] || b.status as string) || "";
-            break;
+case "status":
+  aV = getAgentStatusKey(a);
+  bV = getAgentStatusKey(b);
+  break;
           default:
             aV = ""; bV = "";
         }
@@ -363,7 +367,7 @@ export default function AgentBookingsPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="all">{t("statusFilter.all")}</SelectItem>
-                          {STATUS_KEYS.map((key) => (
+                          {AGENT_STATUS_KEYS.map((key) => (
                             <SelectItem key={key} value={key}>
                               {t(`statuses.${key}`)}
                             </SelectItem>
@@ -378,8 +382,8 @@ export default function AgentBookingsPage() {
                 </thead>
                 <tbody>
                   {displayed.map((b) => {
-                    const statusKey: StatusKey =
-                      LEGACY_STATUS[b.status as string] || (b.status as StatusKey) || "new";
+                    const statusKey = getAgentStatusKey(b);
+
                     return (
                       <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
                         <td className="px-2 py-1 border">{fmtDate((b as any).createdAt)}</td>

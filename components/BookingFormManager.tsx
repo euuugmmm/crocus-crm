@@ -8,6 +8,13 @@ import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import InputMask from "react-input-mask-next";
 import { OPERATORS } from "@/lib/constants/operators";
+import { 
+  AGENT_CARD_PROC,
+  CROCUS_CARD_PROC,
+  TOCO_RO_FEE,
+  TOCO_MD_FEE,
+  OTHER_AGENT_PCT
+} from "@/lib/constants/fees";
 
 import {
   INTERNAL_STATUS_KEYS, 
@@ -97,13 +104,6 @@ const masked = (v: string, s: (v: string) => void, req = false) => (
 );
 const num = (v: string | number) => (typeof v === "string" ? parseFloat(v) || 0 : v);
 const round2 = (x: number) => Math.round(x * 100) / 100;
-
-/* ───────── константы комиссий ───────── */
-const AGENT_CARD_PROC = 0.018;   // 1.8 %
-const CROCUS_CARD_PROC = 0.015;  // 1.5 %
-const TOCO_RO_FEE = 0.015;
-const TOCO_MD_FEE = 0.02;
-const OTHER_AGENT_PCT = 0.06;
 
 /* =================================================================== */
 export default function BookingFormManager({
@@ -231,25 +231,58 @@ const [internalStatus, setInternalStatus] = useState<StatusKey>(
     setCommissionBase(round2(_base));
     setCrocusFee(round2(_crocus));
     setAgentBankFee(round2(_agFee));
-    setNetToPay(round2(_netPay));
+        const calcNetPay = payer === "agent" ? _netPay : bc;
+    setNetToPay(round2(calcNetPay));
 
     const autoComm = round2(_comm);
     const finalComm = commissionInput !== "" ? num(commissionInput) : autoComm;
     setCommission(finalComm);
 
-    /* crocus-банк-fee по умолчанию (редактируемый) */
-    if (card && commissionInput === "" && initialData.crocusBankFee == null) {
-      setCrocusBankFee(round2(bc * CROCUS_CARD_PROC));
-    }
-    if (!card) {
-      setCrocusBankFee(0);
-    }
+// пересчёт Crocus-bank-fee: при оплате туристом 1.5% от bruttoClient,
+// при оплате агентом = netOperator*1.5% + (netOperator - internalNet)
+if (paymentMethod === "card") {
+  if (payer === "tourist") {
+    // Турист платит → 1.5% от суммы, проходящей через эквайринг (brutto клиента)
+    setCrocusBankFee(round2(bc * CROCUS_CARD_PROC));
+  } else {
+    // Агент платит → 1.5% от basePay (суммы, которую Crocus принимает без наценки за эквайринг)
+    // TOCO: basePay = net + crocusFee
+    // НЕ TOCO: basePay = bruttoOperator * (1 - OTHER_AGENT_PCT)
+    const basePay = (allowNet)
+      ? (net + _crocus)
+      : (bo * (1 - OTHER_AGENT_PCT));
+
+    setCrocusBankFee(round2(basePay * CROCUS_CARD_PROC));
+  }
+} else {
+  setCrocusBankFee(0);
+}
+
   }, [operator, payer, paymentMethod, bruttoClient, bruttoOperator, nettoOperator, commissionInput]);
+  
+useEffect(() => {
+  if (payer === "agent") {
+    setBruttoClient(netToPay.toFixed(2));
+  }
+}, [payer, netToPay]);
+
 
   /* ───── итоговые значения ───── */
-  const taxVal   = round2(commission * 0.10);  // только показываем
-  const profit   = round2(num(bruttoClient) - num(internalNet) - commission - crocusBankFee);
-  
+  const taxVal   = round2(commission * 0.10);  // 10% for display only
+const profit = payer === "agent"
+  ? round2(
+      (num(nettoOperator) - num(internalNet)) +
+      crocusFee +
+      (agentBankFee - crocusBankFee)
+    )
+  : round2(
+      num(bruttoClient) -
+      num(internalNet) -
+      commission -
+      crocusBankFee
+    );
+
+    
   /* ---------- работа с туристами ---------- */
   const addTourist = () =>
     setTourists(t => [...t, { name:"", dob:"", passportNumber:"", passportValidUntil:"", nationality:"", hasEUDoc:false, phone:"" }]);
@@ -266,7 +299,7 @@ const [internalStatus, setInternalStatus] = useState<StatusKey>(
       operator, region, departureCity, arrivalCity, flightNumber,
       hotel, checkIn, checkOut, room, mealPlan,
       payer, paymentMethod,
-      bruttoClient: num(bruttoClient),
+      bruttoClient: payer === "agent" ? netToPay : num(bruttoClient),
       bruttoOperator: num(bruttoOperator),
       nettoOperator: num(nettoOperator),
       internalNet:   num(internalNet),
@@ -275,7 +308,7 @@ const [internalStatus, setInternalStatus] = useState<StatusKey>(
       crocusProfit:  profit,
       commissionPaid: !!form.commissionPaid,
       tourists: tourists.filter(t=>t.name),
-      comment, invoiceLink, status,
+      comment, invoiceLink,  status: internalStatus,
       agentName: pAgent, agentAgency: pAgency, email: pEmail,
       updatedAt: new Date().toISOString(),
       createdAt: initialData.createdAt ?? new Date().toISOString(),
@@ -523,12 +556,8 @@ const [internalStatus, setInternalStatus] = useState<StatusKey>(
               <input type="number" value={bruttoClient} onChange={e=>setBruttoClient(e.target.value)} className="w-full border rounded p-2"/>
             </>
           )}
-          {payer==="agent" && (
-            <>
-              <label className="block text-sm font-medium mb-1">{t("bruttoClient")} ({t("optional")})</label>
-              <input type="number" value={bruttoClient} onChange={e=>setBruttoClient(e.target.value)} className="w-full border rounded p-2"/>
-            </>
-          )}
+          {payer==="agent" && null}       
+          
           <label className="block text-sm font-medium mb-1">{t("nettoOperator")}</label>
           <input type="number" value={nettoOperator} onChange={e=>setNettoOperator(e.target.value)} className="w-full border rounded p-2"/>
           {payer==="agent" && (
@@ -628,10 +657,10 @@ const [internalStatus, setInternalStatus] = useState<StatusKey>(
       {/* ---- Summary ---- */}
       <div className="p-3 bg-gray-50 border rounded text-sm space-y-1 mt-4">
         <p><strong>Базовая комиссия:</strong> {commissionBase.toFixed(2)} €</p>
-        {crocusFee>0 && <p><strong>Сбор Crocus (TOCO):</strong> –{crocusFee.toFixed(2)} €</p>}
+        {crocusFee>0 && <p><strong>Сбор Crocus (TOCO):</strong> {crocusFee.toFixed(2)} €</p>}
         {paymentMethod==="card" && (
           <>
-            <p><strong>Банк. комиссия агента (1.8 %):</strong> –{agentBankFee.toFixed(2)} €</p>
+            <p><strong>Банк. комиссия агента (1.8 %):</strong> {agentBankFee.toFixed(2)} €</p>
             <p>
               <strong>Банк. комиссия Crocus (1.5 %):</strong>{" "}
               <input
