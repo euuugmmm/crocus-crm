@@ -1,4 +1,3 @@
-// pages/manager/balances.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -44,10 +43,10 @@ type PayoutRow = {
 };
 
 export default function ManagerBalances() {
-  const { user, isManager } = useAuth();
+  const { user, isManager, loading } = useAuth();
   const router = useRouter();
 
-  const [loading, setLoading] = useState(true);
+  const [listLoading, setListLoading] = useState(true);
   const [agents, setAgents] = useState<AgentWithBalance[]>([]);
   const [finishing, setFinishing] = useState(false);
   const [finishInfo, setFinishInfo] = useState<{
@@ -56,21 +55,29 @@ export default function ManagerBalances() {
     threshold: string;
   } | null>(null);
 
+  // Доступ/загрузка
   useEffect(() => {
-    if (!user || !isManager) {
+    if (loading) return; // ждём auth
+    if (!user) {
       router.replace("/login");
+      return;
+    }
+    if (!isManager) {
+      router.replace("/agent/bookings");
       return;
     }
     loadBalancesAll().catch((err) => {
       console.error("Ошибка при загрузке балансов:", err);
       setAgents([]);
+      setListLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, isManager]);
+  }, [user, isManager, loading]);
 
   async function loadBalancesAll() {
-    setLoading(true);
+    setListLoading(true);
 
+    // 1) пользователи-агенты
     const usersSnap = await getDocs(
       query(
         collection(db, "users"),
@@ -82,6 +89,7 @@ export default function ManagerBalances() {
       ...(d.data() as any),
     }));
 
+    // 2) завершённые брони (для всех)
     const bookingsSnap = await getDocs(
       query(
         collection(db, "bookings"),
@@ -98,6 +106,7 @@ export default function ManagerBalances() {
       commByAgent.set(ag, (commByAgent.get(ag) || 0) + c);
     });
 
+    // 3) выплаты
     const payoutsSnap = await getDocs(collection(db, "payouts"));
     const payByAgent = new Map<string, number>();
     payoutsSnap.docs.forEach((doc) => {
@@ -109,6 +118,7 @@ export default function ManagerBalances() {
       payByAgent.set(ag, (payByAgent.get(ag) || 0) + a);
     });
 
+    // 4) баланс
     const withBalance: AgentWithBalance[] = allAgents.map((a) => {
       const totalCom = commByAgent.get(a.id) || 0;
       const totalPay = payByAgent.get(a.id) || 0;
@@ -118,9 +128,10 @@ export default function ManagerBalances() {
     withBalance.sort((x, y) => (y.balance || 0) - (x.balance || 0));
 
     setAgents(withBalance);
-    setLoading(false);
+    setListLoading(false);
   }
 
+  // Завершение вчерашних
   const handleFinishYesterday = async () => {
     if (finishing) return;
     setFinishing(true);
@@ -189,7 +200,7 @@ export default function ManagerBalances() {
               </tr>
             </thead>
             <tbody>
-              {loading ? (
+              {listLoading ? (
                 <tr>
                   <td colSpan={4} className="p-4 text-center">
                     Загрузка…

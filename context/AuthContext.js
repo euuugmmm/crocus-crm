@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState } from "react";
+// context/AuthContext.js (или .jsx)
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { auth, db } from "../firebaseConfig";
 import {
   onAuthStateChanged,
@@ -8,7 +9,7 @@ import {
 import { doc, getDoc } from "firebase/firestore";
 import { useRouter } from "next/router";
 
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const router = useRouter();
@@ -20,9 +21,12 @@ export function AuthProvider({ children }) {
     if (!auth) return; // на сервере пропускаем
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        // берём профиль
-        const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
-        setUserData(userDoc.exists() ? userDoc.data() : null);
+        try {
+          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          setUserData(userDoc.exists() ? userDoc.data() : null);
+        } catch {
+          setUserData(null);
+        }
         setUser(firebaseUser);
       } else {
         setUser(null);
@@ -38,6 +42,7 @@ export function AuthProvider({ children }) {
     if (!auth) return;
     await signInWithEmailAndPassword(auth, email, password);
   };
+
   const logout = async () => {
     if (!auth) return;
     await signOut(auth);
@@ -45,11 +50,49 @@ export function AuthProvider({ children }) {
   };
 
   // роли
-  const isAgent        = userData?.role === "agent";
-  const isManager      = userData?.role === "manager";
-  const isSupermanager = userData?.role === "supermanager";
-  const isAdmin        = userData?.role === "admin";
-  const isOlimpya      = userData?.role === "olimpya_agent";
+  const role = userData?.role;
+  const isAgent        = role === "agent";
+  const isOlimpya      = role === "olimpya_agent";
+  const isManager      = role === "manager";
+  const isSupermanager = role === "supermanager";
+  const isAdmin        = role === "admin";
+
+  // мягкий авто-редирект только с "хабов", чтобы F5 на внутренних страницах не уносил
+  const hasAutoRoutedRef = useRef(false);
+  useEffect(() => {
+    if (loading) return;
+
+    const { pathname } = router;
+
+    // если не залогинен — /manager и /agent ведём на логин
+    if (!user) {
+      if (pathname === "/manager" || pathname === "/agent") {
+        router.replace("/login");
+      }
+      return;
+    }
+
+    if (hasAutoRoutedRef.current) return;
+
+    const isHub =
+      pathname === "/" ||
+      pathname === "/login" ||
+      pathname === "/manager" ||
+      pathname === "/agent";
+
+    if (!isHub) return;
+
+    if (isManager || isSupermanager || isAdmin) {
+      hasAutoRoutedRef.current = true;
+      router.replace("/manager/bookings");
+      return;
+    }
+    if (isAgent || isOlimpya) {
+      hasAutoRoutedRef.current = true;
+      router.replace("/agent/bookings");
+      return;
+    }
+  }, [user, role, isManager, isSupermanager, isAdmin, isAgent, isOlimpya, loading, router]);
 
   return (
     <AuthContext.Provider

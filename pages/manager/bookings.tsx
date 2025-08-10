@@ -3,7 +3,6 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import { collection, query as fsQuery, onSnapshot, deleteDoc, doc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { useAuth } from "@/context/AuthContext";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
@@ -17,6 +16,7 @@ import { serverSideTranslations } from "next-i18next/serverSideTranslations";
 import { STATUS_KEYS, STATUS_COLORS, StatusKey } from "@/lib/constants/statuses";
 import { fmtDate, toDate } from "@/lib/utils/dates";
 import { fixed2, toNumber } from "@/lib/utils/numbers";
+import { collection, query as fsQuery, onSnapshot, deleteDoc, doc, where } from "firebase/firestore";
 
 export async function getServerSideProps({ locale }: { locale: string }) {
   return { props: { ...(await serverSideTranslations(locale, ["common"])) } };
@@ -24,6 +24,7 @@ export async function getServerSideProps({ locale }: { locale: string }) {
 
 type Booking = {
   id?: string;
+  agentId?: string;
   bookingType?: string;
   createdAt?: any;
   bookingNumber?: string;
@@ -40,11 +41,23 @@ type Booking = {
   voucherLinks?: string[];
 };
 
+const BOOKING_TYPE_LABELS: Record<string, string> = {
+  olimpya_base: "Olimpya",
+  subagent: "Субагент",
+};
+
+const humanizeBookingType = (v?: string) => {
+  if (!v) return "—";
+  return BOOKING_TYPE_LABELS[v] ?? v.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
 export default function ManagerBookings() {
   const router = useRouter();
   const { t } = useTranslation("common");
   const { user, loading, isManager, isSuperManager, isAdmin } = useAuth();
   const tableRef = useRef<HTMLTableElement | null>(null);
+
+  const agentIdParam = typeof router.query.agentId === "string" ? router.query.agentId : undefined;
 
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [filters, setFilters] = useState({
@@ -66,6 +79,7 @@ export default function ManagerBookings() {
   });
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
 
+  // ЕДИНСТВЕННАЯ подписка на Firestore (с учётом agentId из ссылки)
   useEffect(() => {
     if (!router.isReady) return;
     if (loading) return;
@@ -73,12 +87,15 @@ export default function ManagerBookings() {
       router.replace("/login");
       return;
     }
-    const q = fsQuery(collection(db, "bookings"));
+
+    const base = collection(db, "bookings");
+    const q = agentIdParam ? fsQuery(base, where("agentId", "==", agentIdParam)) : fsQuery(base);
+
     const unsub = onSnapshot(q, (snap) => {
       setBookings(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
     });
     return () => unsub();
-  }, [loading, user, isManager, isSuperManager, isAdmin, router]);
+  }, [router.isReady, loading, user, isManager, isSuperManager, isAdmin, agentIdParam]);
 
   const displayed = useMemo(() => {
     const createdFrom = filters.dateFrom ? new Date(filters.dateFrom) : null;
@@ -90,6 +107,9 @@ export default function ManagerBookings() {
 
     return bookings
       .filter((b) => {
+        // страховка: если пришёл agentId в URL, отсекаем чужие заявки
+        if (agentIdParam && b.agentId !== agentIdParam) return false;
+
         const created = toDate(b.createdAt);
         if (createdFrom && (!created || created < createdFrom)) return false;
         if (createdTo && (!created || created > createdTo)) return false;
@@ -167,7 +187,7 @@ export default function ManagerBookings() {
             return 0;
         }
       });
-  }, [bookings, filters, sortConfig]);
+  }, [bookings, filters, sortConfig, agentIdParam]);
 
   function requestSort(key: string) {
     setSortConfig((prev) => {
@@ -200,39 +220,17 @@ export default function ManagerBookings() {
               <thead className="bg-gray-100 text-center">
                 <tr>
                   <th className="px-2 py-1 border w-[120px]">Тип заявки</th>
-                  <th className="px-2 py-1 border w-[100px] cursor-pointer" onClick={() => requestSort("date")}>
-                    {t("date")}
-                  </th>
-                  <th className="px-2 py-1 border w-[80px] cursor-pointer" onClick={() => requestSort("bookingNumber")}>
-                    {t("№")}
-                  </th>
-                  <th className="px-2 py-1 border w-[200px] cursor-pointer" onClick={() => requestSort("agent")}>
-                    {t("agent")}
-                  </th>
-                  <th className="px-2 py-1 border w-[150px] cursor-pointer" onClick={() => requestSort("operator")}>
-                    {t("operator")}
-                  </th>
-                  <th className="px-2 py-1 border w-[400px] cursor-pointer text-center" onClick={() => requestSort("hotel")}>
-                    {t("hotel")}
-                  </th>
-                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("checkIn")}>
-                    {t("checkIn")}
-                  </th>
-                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("checkOut")}>
-                    {t("checkOut")}
-                  </th>
-                  <th className="px-2 py-1 border w-[100px] cursor-pointer text-center" onClick={() => requestSort("bruttoClient")}>
-                    Брутто Клиент (€)
-                  </th>
-                  <th className="px-2 py-1 border w-[100px] cursor-pointer text-center" onClick={() => requestSort("internalNet")}>
-                    Netto Fact (€)
-                  </th>
-                  <th className="px-2 py-1 border w-[120px] cursor-pointer text-center" onClick={() => requestSort("crocusProfit")}>
-                    Комиссия Crocus (€)
-                  </th>
-                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("status")}>
-                    {t("status")}
-                  </th>
+                  <th className="px-2 py-1 border w-[100px] cursor-pointer" onClick={() => requestSort("date")}>{t("date")}</th>
+                  <th className="px-2 py-1 border w-[80px] cursor-pointer" onClick={() => requestSort("bookingNumber")}>{t("№")}</th>
+                  <th className="px-2 py-1 border w-[200px] cursor-pointer" onClick={() => requestSort("agent")}>{t("agent")}</th>
+                  <th className="px-2 py-1 border w-[150px] cursor-pointer" onClick={() => requestSort("operator")}>{t("operator")}</th>
+                  <th className="px-2 py-1 border w-[400px] cursor-pointer text-center" onClick={() => requestSort("hotel")}>{t("hotel")}</th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("checkIn")}>{t("checkIn")}</th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("checkOut")}>{t("checkOut")}</th>
+                  <th className="px-2 py-1 border w-[100px] cursor-pointer text-center" onClick={() => requestSort("bruttoClient")}>Брутто Клиент (€)</th>
+                  <th className="px-2 py-1 border w-[100px] cursor-pointer text-center" onClick={() => requestSort("internalNet")}>Netto Fact (€)</th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer text-center" onClick={() => requestSort("crocusProfit")}>Комиссия Crocus (€)</th>
+                  <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("status")}>{t("status")}</th>
                   <th className="px-2 py-1 border w-[100px]">{t("invoice")}</th>
                   <th className="px-2 py-1 border w-[120px]">{t("vouchers")}</th>
                   <th className="px-2 py-1 border w-[100px]">{t("actions")}</th>
@@ -300,7 +298,7 @@ export default function ManagerBookings() {
                   const statusKey = (b.status as StatusKey) || "new";
                   return (
                     <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
-                      <td className="px-2 py-1 border w-[120px]">{b.bookingType || "-"}</td>
+                      <td className="px-2 py-1 border w-[120px]">{humanizeBookingType(b.bookingType)}</td>
                       <td className="px-2 py-1 border w-[100px] whitespace-nowrap">{fmtDate(b.createdAt)}</td>
                       <td className="px-2 py-1 border w-[80px] whitespace-nowrap">{b.bookingNumber || "—"}</td>
                       <td className="px-2 py-1 border w-[200px] truncate">
@@ -347,9 +345,10 @@ export default function ManagerBookings() {
                           <button
                             title={t("edit")}
                             className="text-xl hover:scale-110 transition"
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.preventDefault();
                               const path = b.bookingType === "olimpya_base" ? `/olimpya/${b.id}` : `/manager/${b.id}`;
-                              router.push(path);
+                              window.open(path, "_blank", "noopener,noreferrer");
                             }}
                           >
                             ✏️
@@ -375,7 +374,9 @@ export default function ManagerBookings() {
                   <td className="px-2 py-2 text-right">{sumBrutto}</td>
                   <td className="px-2 py-2 text-right">{sumInternal}</td>
                   <td className="px-2 py-2 text-right">{sumCrocus}</td>
-                  <td />
+                  {/* Колонка 'Статус' — количество заявок в текущей выборке */}
+                  <td className="px-2 py-2 text-center">{displayed.length}</td>
+                  {/* Invoice / Vouchers / Actions */}
                   <td />
                   <td />
                   <td />

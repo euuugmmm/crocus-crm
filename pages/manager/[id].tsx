@@ -4,7 +4,6 @@
 import Head from "next/head";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import Link from "next/link";
 import {
   doc,
   getDoc,
@@ -42,7 +41,9 @@ type Comment = {
 export default function EditBookingPage() {
   const router = useRouter();
   const { id } = router.query as { id?: string };
-  const { user, loading, isManager, logout } = useAuth();
+
+  // учитываем все менеджерские роли
+  const { user, loading, isManager, isSupermanager, isAdmin } = useAuth();
 
   const [booking, setBooking] = useState<any>(null);
   const [loadingData, setLoadingData] = useState(true);
@@ -54,48 +55,47 @@ export default function EditBookingPage() {
   // Защита доступа
   useEffect(() => {
     if (loading) return;
-    if (!user) router.replace("/login");
-    else if (!isManager) router.replace("/agent/bookings");
-  }, [loading, user, isManager]);
+    const allowed = isManager || isSupermanager || isAdmin;
+    if (!user || !allowed) {
+      router.replace("/login");
+    }
+  }, [loading, user, isManager, isSupermanager, isAdmin, router]);
 
   // Загрузка брони
   useEffect(() => {
     (async () => {
-      if (!id || !isManager) return;
+      const allowed = isManager || isSupermanager || isAdmin;
+      if (!id || !allowed) return;
       const snap = await getDoc(doc(db, "bookings", id));
       if (snap.exists()) setBooking({ id: snap.id, ...snap.data() });
       setLoadingData(false);
     })();
-  }, [id, isManager]);
+  }, [id, isManager, isSupermanager, isAdmin]);
 
   // Загрузка комментариев
   useEffect(() => {
     (async () => {
       if (!id) return;
-      const q = query(
-        collection(db, `bookings/${id}/comments`),
-        orderBy("createdAt", "asc")
-      );
+      const q = query(collection(db, `bookings/${id}/comments`), orderBy("createdAt", "asc"));
       const snap = await getDocs(q);
       setComments(
-        snap.docs.map(d => {
+        snap.docs.map((d) => {
           const data = d.data() as any;
           return {
             id: d.id,
             text: data.text,
             authorName: data.authorName,
-            createdAt: data.createdAt?.toDate
-              ? data.createdAt.toDate()
-              : new Date(),
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
           };
         })
       );
     })();
   }, [id]);
 
-  // Сохранение изменений брони
+  // Сохранение изменений брони — остаёмся на этой странице
   const saveBooking = async (data: any) => {
     if (!id) return;
+
     const ref = doc(db, "bookings", id);
     const oldSnap = await getDoc(ref);
     const oldData = oldSnap.data() as any;
@@ -123,18 +123,25 @@ export default function EditBookingPage() {
       }).catch(console.error);
     }
 
-    router.push("/manager/bookings");
+    // обновим локально, чтобы форма увидела свежие данные
+    setBooking((prev: any) => ({ ...(prev || {}), ...data, updatedAt: new Date() }));
+
+    alert("Сохранено");
+    // НИКУДА не уходим — остаёмся на текущей странице редактирования
+    // Если нужно принудительно перечитать из Firestore:
+    // const fresh = await getDoc(ref);
+    // if (fresh.exists()) setBooking({ id: fresh.id, ...fresh.data() });
   };
 
   // Отправка нового комментария
   const handleSend = async () => {
-    if (!id || !newComment.trim()) return;
+    if (!id || !newComment.trim() || !user) return;
     setSending(true);
 
     await addDoc(collection(db, `bookings/${id}/comments`), {
       text: newComment.trim(),
-      authorId: user!.uid,
-      authorName: user!.email || "Менеджер",
+      authorId: user.uid,
+      authorName: user.email || "Менеджер",
       createdAt: serverTimestamp(),
     });
 
@@ -157,21 +164,16 @@ export default function EditBookingPage() {
     }).catch(console.error);
 
     // перезагрузить комментарии
-    const q = query(
-      collection(db, `bookings/${id}/comments`),
-      orderBy("createdAt", "asc")
-    );
+    const q = query(collection(db, `bookings/${id}/comments`), orderBy("createdAt", "asc"));
     const snap = await getDocs(q);
     setComments(
-      snap.docs.map(d => {
+      snap.docs.map((d) => {
         const data = d.data() as any;
         return {
           id: d.id,
           text: data.text,
           authorName: data.authorName,
-          createdAt: data.createdAt?.toDate
-            ? data.createdAt.toDate()
-            : new Date(),
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
         };
       })
     );
@@ -195,14 +197,11 @@ export default function EditBookingPage() {
 
       <ManagerLayout>
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-          <h1 className="text-2xl font-bold">
-            Редактировать заявку: {booking.bookingNumber}
-          </h1>
+          <h1 className="text-2xl font-bold">Редактировать заявку: {booking.bookingNumber}</h1>
 
           <BookingFormManager
             initialData={booking}
             onSubmit={saveBooking}
-
             agentName={booking.agentName}
             agentAgency={booking.agentAgency}
           />
@@ -212,22 +211,18 @@ export default function EditBookingPage() {
             bookingNumber={booking.bookingNumber}
             links={booking.voucherLinks || []}
           />
-          <UploadScreenshots
-            bookingDocId={id as string}
-            bookingNumber={booking.bookingNumber}
-          />
+
+          <UploadScreenshots bookingDocId={id as string} bookingNumber={booking.bookingNumber} />
 
           {/* COMMENTS */}
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">Комментарии</h2>
 
-            {comments.map(c => (
+            {comments.map((c) => (
               <div key={c.id} className="p-3 border rounded">
                 <p className="text-sm text-gray-600">
                   <strong>{c.authorName}</strong>{" "}
-                  <span className="text-gray-500">
-                    {format(c.createdAt, "dd.MM.yyyy HH:mm")}
-                  </span>
+                  <span className="text-gray-500">{format(c.createdAt, "dd.MM.yyyy HH:mm")}</span>
                 </p>
                 <p className="mt-1">{c.text}</p>
               </div>
@@ -238,14 +233,10 @@ export default function EditBookingPage() {
               rows={3}
               placeholder="Ваш комментарий…"
               value={newComment}
-              onChange={e => setNewComment(e.target.value)}
+              onChange={(e) => setNewComment(e.target.value)}
             />
 
-            <Button
-              onClick={handleSend}
-              variant="default"
-              disabled={sending || !newComment.trim()}
-            >
+            <Button onClick={handleSend} variant="default" disabled={sending || !newComment.trim()}>
               {sending ? "Отправка…" : "Отправить"}
             </Button>
           </div>

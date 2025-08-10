@@ -1,7 +1,8 @@
+// pages/olimpya/[id].tsx
 "use client";
 
 import Head from "next/head";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import {
   doc,
@@ -24,9 +25,13 @@ import BookingFormManagerOlimpya, {
 } from "@/components/BookingFormManagerOlimpya";
 import UploadScreenshots from "@/components/UploadScreenshots";
 import { Button } from "@/components/ui/button";
-
 import OlimpyaLayout from "@/components/layouts/OlimpyaLayout";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
+import { serverSideTranslations } from "next-i18next/serverSideTranslations";
+
+export async function getServerSideProps({ locale }: { locale: string }) {
+  return { props: { ...(await serverSideTranslations(locale, ["common"])) } };
+}
 
 type Comment = {
   id: string;
@@ -38,17 +43,17 @@ type Comment = {
 export default function EditOlimpyaBookingPage() {
   const router = useRouter();
   const { id } = router.query as { id?: string };
-  const {
-    user,
-    loading,
-    isOlimpya,
-    isManager,
-    isSuperManager,
-    isAdmin,
-  } = useAuth();
+  const { user, loading, isOlimpya, isManager, isSuperManager, isAdmin } = useAuth();
 
-  const isPrivileged = isManager || isSuperManager || isAdmin;
-  const Layout = isPrivileged ? ManagerLayout : OlimpyaLayout;
+  // ВАЖНО: чтобы не было mismatch между сервером и клиентом,
+  // на сервере и в первый клиентский рендер используем один и тот же Layout.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const isPrivileged = !!(isManager || isSuperManager || isAdmin);
+  const EffectiveLayout = useMemo(
+    () => (mounted && isPrivileged ? ManagerLayout : OlimpyaLayout),
+    [mounted, isPrivileged]
+  );
 
   const [booking, setBooking] = useState<
     (OlimpyaBookingValues & { agentName?: string; agentAgency?: string }) | null
@@ -59,6 +64,7 @@ export default function EditOlimpyaBookingPage() {
   const [newComment, setNewComment] = useState("");
   const [sending, setSending] = useState(false);
 
+  // Доступ
   useEffect(() => {
     if (loading) return;
     if (!user || (!isOlimpya && !isPrivileged)) {
@@ -66,6 +72,7 @@ export default function EditOlimpyaBookingPage() {
     }
   }, [loading, user, isOlimpya, isPrivileged, router]);
 
+  // Загрузка брони
   useEffect(() => {
     if (!id) return;
     (async () => {
@@ -99,8 +106,8 @@ export default function EditOlimpyaBookingPage() {
           commissionIgor: d.commissionIgor,
           commissionEvgeniy: d.commissionEvgeniy,
           commission: d.commission,
-          supplierBookingNumber: d.supplierBookingNumber, // ⬅ добавили
-          payerName: d.payerName,                         // ⬅ добавили
+          supplierBookingNumber: d.supplierBookingNumber,
+          payerName: d.payerName,
           comment: d.comment,
           agentName: d.agentName,
           agentAgency: d.agentAgency,
@@ -110,13 +117,11 @@ export default function EditOlimpyaBookingPage() {
     })();
   }, [id]);
 
+  // Загрузка комментариев
   useEffect(() => {
     if (!id) return;
     (async () => {
-      const q = query(
-        collection(db, `bookings/${id}/comments`),
-        orderBy("createdAt", "asc")
-      );
+      const q = query(collection(db, `bookings/${id}/comments`), orderBy("createdAt", "asc"));
       const snap = await getDocs(q);
       setComments(
         snap.docs.map((d) => {
@@ -132,6 +137,7 @@ export default function EditOlimpyaBookingPage() {
     })();
   }, [id]);
 
+  // Сохранение
   const saveBooking = async (values: OlimpyaBookingValues) => {
     if (!id) return;
     const ref = doc(db, "bookings", id);
@@ -162,6 +168,7 @@ export default function EditOlimpyaBookingPage() {
     router.push("/olimpya/bookings");
   };
 
+  // Отправка комментария
   const handleSend = async () => {
     if (!id || !newComment.trim()) return;
     setSending(true);
@@ -188,10 +195,7 @@ export default function EditOlimpyaBookingPage() {
       }),
     }).catch(console.error);
 
-    const q = query(
-      collection(db, `bookings/${id}/comments`),
-      orderBy("createdAt", "asc")
-    );
+    const q = query(collection(db, `bookings/${id}/comments`), orderBy("createdAt", "asc"));
     const snap = await getDocs(q);
     setComments(
       snap.docs.map((d) => {
@@ -210,67 +214,62 @@ export default function EditOlimpyaBookingPage() {
   };
 
   return (
-    <Layout>
+    // Подавляем возможные расхождения текста внутри лейаута (бренд/хедер),
+    // пока не смонтируемся и не определим точный Layout.
+    <div suppressHydrationWarning>
       <Head>
-        <title>
-          {booking ? `Редактировать №${booking.bookingNumber}` : "Загрузка…"}
-        </title>
+        <title>{booking ? `Редактировать №${booking.bookingNumber}` : "Загрузка…"}</title>
       </Head>
-      <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-        {loading || loadingData ? (
-          <p className="text-center mt-6">Загрузка…</p>
-        ) : booking ? (
-          <>
-            <h1 className="text-2xl font-bold mb-4">
-              Редактировать заявку №{booking.bookingNumber}
-            </h1>
 
-            <BookingFormManagerOlimpya
-              initialValues={booking}
-              onSubmit={saveBooking}
-              bookingNumber={booking.bookingNumber}
-              agentName={booking.agentName}
-              agentAgency={booking.agentAgency}
-            />
+      <EffectiveLayout>
+        <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+          {loading || loadingData ? (
+            <p className="text-center mt-6">Загрузка…</p>
+          ) : booking ? (
+            <>
+              <h1 className="text-2xl font-bold mb-4">
+                Редактировать заявку №{booking.bookingNumber}
+              </h1>
 
-            <UploadScreenshots
-              bookingDocId={id}
-              bookingNumber={booking.bookingNumber!}
-            />
-
-            <div className="space-y-4 mt-6">
-              <h2 className="text-lg font-semibold">Чат комментариев</h2>
-              {comments.map((c) => (
-                <div key={c.id} className="p-3 border rounded">
-                  <p className="text-sm text-gray-600">
-                    <strong>{c.authorName}</strong>{" "}
-                    <span className="text-gray-500">
-                      {format(c.createdAt, "dd.MM.yyyy HH:mm")}
-                    </span>
-                  </p>
-                  <p className="mt-1">{c.text}</p>
-                </div>
-              ))}
-              <textarea
-                className="w-full border rounded p-2"
-                rows={3}
-                placeholder="Ваш комментарий…"
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
+              <BookingFormManagerOlimpya
+                initialValues={booking}
+                onSubmit={saveBooking}
+                bookingNumber={booking.bookingNumber}
+                agentName={booking.agentName}
+                agentAgency={booking.agentAgency}
               />
-              <Button
-                onClick={handleSend}
-                variant="default"
-                disabled={sending || !newComment.trim()}
-              >
-                {sending ? "Отправка…" : "Отправить"}
-              </Button>
-            </div>
-          </>
-        ) : (
-          <p className="text-center mt-6 text-red-500">Заявка не найдена.</p>
-        )}
-      </div>
-    </Layout>
+
+              <UploadScreenshots bookingDocId={(id as string) || ""} bookingNumber={booking.bookingNumber!} />
+
+              <div className="space-y-4 mt-6">
+                <h2 className="text-lg font-semibold">Чат комментариев</h2>
+                {comments.map((c) => (
+                  <div key={c.id} className="p-3 border rounded">
+                    <p className="text-sm text-gray-600">
+                      <strong>{c.authorName}</strong>{" "}
+                      <span className="text-gray-500">{format(c.createdAt, "dd.MM.yyyy HH:mm")}</span>
+                    </p>
+                    <p className="mt-1">{c.text}</p>
+                  </div>
+                ))}
+
+                <textarea
+                  className="w-full border rounded p-2"
+                  rows={3}
+                  placeholder="Ваш комментарий…"
+                  value={newComment}
+                  onChange={(e) => setNewComment(e.target.value)}
+                />
+                <Button onClick={handleSend} variant="default" disabled={sending || !newComment.trim()}>
+                  {sending ? "Отправка…" : "Отправить"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="text-center mt-6 text-red-500">Заявка не найдена.</p>
+          )}
+        </div>
+      </EffectiveLayout>
+    </div>
   );
 }
