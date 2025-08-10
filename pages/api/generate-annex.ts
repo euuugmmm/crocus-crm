@@ -14,13 +14,10 @@ import {
   DocumentData,
 } from "firebase-admin/firestore";
 
-/* ───────── helpers ───────── */
 function getCred(plain: string, b64: string) {
   if (process.env[plain]) return JSON.parse(process.env[plain]!);
   if (process.env[b64])
-    return JSON.parse(
-      Buffer.from(process.env[b64]!, "base64").toString("utf8")
-    );
+    return JSON.parse(Buffer.from(process.env[b64]!, "base64").toString("utf8"));
   throw new Error(`Neither ${plain} nor ${b64} set`);
 }
 
@@ -28,20 +25,25 @@ type FireDate = Timestamp | Date | string | undefined | null;
 
 type PayoutItem = {
   bookingId?: string;
-  amount?: number;
-  commission?: number;
-  [k: string]: any;
+  bookingNumber?: string;
+  hotel?: string;
+  checkIn?: FireDate;
+  checkOut?: FireDate;
+  amountGross?: number; // БРУТТО — ЭТО И ПИШЕМ В АНЕКСУ
+  amountNet?: number;
 };
 
 type PayoutDoc = {
   agentId: string;
   items?: PayoutItem[];
-  bookings?: string[];
+  bookings?: string[]; // на всякий случай, если где-то хранится
   createdAt?: FireDate;
+  comment?: string;
+  annexSeq?: number; // номер анексы, если уже был выдан
   [k: string]: any;
 };
 
-type Tourist = { name?: string; [k: string]: any };
+type Tourist = { name?: string };
 
 type BookingDoc = {
   id: string;
@@ -51,14 +53,9 @@ type BookingDoc = {
   createdAt?: FireDate;
   checkIn?: FireDate;
   checkOut?: FireDate;
-  commission?: number;
-  agentCommission?: number;
   [k: string]: any;
 };
 
-// "умное" форматирование даты:
-// - если строка вида dd.MM.yyyy или dd/MM/yyyy — нормализуем и возвращаем
-// - если Timestamp/Date/ISO — форматируем в ro-RO
 function fmtSmart(d?: FireDate): string {
   if (!d) return "—";
   if (typeof d === "string") {
@@ -82,20 +79,15 @@ function fmtSmart(d?: FireDate): string {
 
 const safe = (s: string) => s.replace(/[\\/:*?"<>|]/g, "_").trim();
 
-/* ───────── Firebase Admin ───────── */
 if (!getApps().length) {
   initializeApp({
     credential: cert(
-      getCred(
-        "FIREBASE_SERVICE_ACCOUNT_JSON",
-        "FIREBASE_SERVICE_ACCOUNT_JSON_BASE64"
-      )
+      getCred("FIREBASE_SERVICE_ACCOUNT_JSON", "FIREBASE_SERVICE_ACCOUNT_JSON_BASE64")
     ),
   });
 }
 const db = getFirestore();
 
-/* ───────── Google Drive ───────── */
 const drive = google.drive({
   version: "v3",
   auth: new google.auth.GoogleAuth({
@@ -108,65 +100,61 @@ const drive = google.drive({
 });
 const ROOT_FOLDER_ID = process.env.CONTRACTS_ROOT_FOLDER_ID!;
 
-/* ───────── Handler ───────── */
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).end("Only POST");
   }
+
   const { payoutId } = req.body as { payoutId?: string };
   if (!payoutId) return res.status(400).json({ error: "payoutId missing" });
 
   try {
     // 1) payout
-    const pSnap = await db.doc(`payouts/${payoutId}`).get();
+    const pRef = db.doc(`payouts/${payoutId}`);
+    const pSnap = await pRef.get();
     if (!pSnap.exists) throw new Error("payout not found");
     const p = pSnap.data() as PayoutDoc;
 
-    // 2) собрать id броней из p.bookings и/или p.items[].bookingId
-    const items: PayoutItem[] = Array.isArray(p.items) ? p.items : [];
-    const direct: string[] = Array.isArray(p.bookings) ? p.bookings : [];
+    // 2) агент + номер анексы (старый метод: users.annexCount)
+    const uRef = db.doc(`users/${p.agentId}`);
+    const uSnap = await uRef.get();
+    const u = uSnap.exists ? (uSnap.data() as DocumentData) : {};
 
-    const fromItems = items
-      .map((i) => i?.bookingId)
-      .filter((x): x is string => Boolean(x));
-    const allIdsUnique = Array.from(new Set<string>([...direct, ...fromItems]));
-
-    // карта "bookingId -> item"
-    const itemByBooking: Record<string, PayoutItem> = {};
-    for (const it of items) {
-      if (it?.bookingId) itemByBooking[it.bookingId] = it;
+    let annexNumber = Number(p.annexSeq || 0);
+    if (!annexNumber) {
+      const current = Number(u?.annexCount || 0);
+      annexNumber = current + 1;
+      // фиксируем номер в payout и инкрементим счётчик у пользователя
+      await Promise.all([
+        pRef.update({ annexSeq: annexNumber, updatedAt: FieldValue.serverTimestamp() }),
+        uRef.update({ annexCount: annexNumber, updatedAt: FieldValue.serverTimestamp() }),
+      ]);
     }
 
-    // 3) загрузить брони
-    const snaps = await Promise.all(
-      allIdsUnique.map((id) => db.doc(`bookings/${id}`).get())
+    // 3) соберём bookingId из items и подгрузим метаданные броней
+    const items: PayoutItem[] = Array.isArray(p.items) ? p.items : [];
+    const ids = Array.from(
+      new Set(
+        items
+          .map((it) => it?.bookingId)
+          .filter((x): x is string => Boolean(x))
+      )
     );
-const bookingIds: string[] = Array.isArray(p.items)
-  ? p.items.map((it: any) => it.bookingId)
-  : (p.bookings as string[]);
 
-const bookingSnaps = await Promise.all(
-  bookingIds.map(id => db.doc(`bookings/${id}`).get())
-);
-const bookings: any[] = bookingSnaps.map(s => ({ id: s.id, ...s.data() }));
+    const bookingSnaps = await Promise.all(ids.map((id) => db.doc(`bookings/${id}`).get()));
+    const bookings: BookingDoc[] = bookingSnaps.map((s) => ({
+      id: s.id,
+      ...(s.data() as any),
+    }));
 
-    // 4) агент + номер аннекса + дата контракта
-    const uSnap = await db.doc(`users/${p.agentId}`).get();
-    const u = uSnap.exists ? (uSnap.data() as DocumentData) : {};
-    const annexNumber = (u?.annexCount || 0) + 1;
+    // 4) строки по броням (всегда БРУТТО из payout.items[].amountGross)
+    const itemById = Object.fromEntries(
+      items
+        .filter((it) => it?.bookingId)
+        .map((it) => [String(it.bookingId), it])
+    );
 
-    const contractDateRaw: FireDate =
-      (u?.lastContract && (u.lastContract as any).date) ??
-      (u as any)?.contractDate ??
-      p?.date ??
-      (u as any)?.date ??
-      new Date();
-
-    // 5) строки по броням
     const lines =
       bookings.length > 0
         ? bookings
@@ -174,21 +162,8 @@ const bookings: any[] = bookingSnaps.map(s => ({ id: s.id, ...s.data() }));
               const tourists = Array.isArray(b.tourists)
                 ? b.tourists.map((t) => t?.name).filter(Boolean).join(", ")
                 : "—";
-
-              // выбрать сумму для этой брони
-              const it =
-                itemByBooking[b.id] ||
-                (b.bookingNumber ? itemByBooking[b.bookingNumber] : undefined);
-
-              const paidCandidate =
-                (typeof it?.amount === "number" ? it.amount : undefined) ??
-                (typeof it?.commission === "number" ? it.commission : undefined) ??
-                (typeof b.agentCommission === "number"
-                  ? b.agentCommission
-                  : undefined) ??
-                (typeof b.commission === "number" ? b.commission : undefined);
-
-              const paid = Number(paidCandidate ?? 0);
+              const it = itemById[b.id] as PayoutItem | undefined;
+              const paid = Number(it?.amountGross ?? 0); // БРУТТО
 
               return [
                 `Rezervarea №: ${b.bookingNumber || b.id}`,
@@ -197,26 +172,21 @@ const bookings: any[] = bookingSnaps.map(s => ({ id: s.id, ...s.data() }));
                 `Turisti: ${tourists || "—"}`,
                 `Data Check-in: ${fmtSmart(b.checkIn)}`,
                 `Data Check-out: ${fmtSmart(b.checkOut)}`,
-                `Comision: ${paid.toFixed(2)}`,
+                `Comision (brut): ${paid.toFixed(2)}`,
               ].join("\n");
             })
             .join("\n\n")
         : "—";
 
-    // 6) total
-    const total = bookings.reduce((sum, b) => {
-      const it =
-        itemByBooking[b.id] ||
-        (b.bookingNumber ? itemByBooking[b.bookingNumber] : undefined);
+    // 5) total = сумма БРУТТО по items
+    const total = (items || []).reduce((s, it) => s + Number(it?.amountGross ?? 0), 0);
 
-      const paidCandidate =
-        (typeof it?.amount === "number" ? it.amount : undefined) ??
-        (typeof it?.commission === "number" ? it.commission : undefined) ??
-        (typeof b.agentCommission === "number" ? b.agentCommission : undefined) ??
-        (typeof b.commission === "number" ? b.commission : undefined);
-
-      return sum + Number(paidCandidate ?? 0);
-    }, 0);
+    // 6) дата контракта и комментарий
+    const contractDateRaw: FireDate =
+      (u?.lastContract && (u.lastContract as any).date) ??
+      (u as any)?.contractDate ??
+      p?.createdAt ??
+      new Date();
 
     const vars = {
       annexNumber,
@@ -226,9 +196,10 @@ const bookings: any[] = bookingSnaps.map(s => ({ id: s.id, ...s.data() }));
       agentName: u?.agentName || "—",
       lines,
       total: total.toFixed(2),
+      payoutComment: p?.comment || "", // можно вывести в шаблон, если нужно
     };
 
-    // 7) генерируем DOCX
+    // 7) рендер DOCX
     const tplPath = resolve(process.cwd(), "templates/payout-annex.docx");
     const buffer = await createReport({
       template: await fsp.readFile(tplPath),
@@ -236,13 +207,13 @@ const bookings: any[] = bookingSnaps.map(s => ({ id: s.id, ...s.data() }));
       cmdDelimiter: ["+++", "+++"],
       processLineBreaks: true,
     });
-    const tmpDoc = join(tmpdir(), `Annexa-${payoutId}.docx`);
+    const tmpDoc = join(tmpdir(), `Anexa-${payoutId}.docx`);
     await fsp.writeFile(tmpDoc, buffer);
 
     // 8) папка в Drive
     const { data: list } = await drive.files.list({
       q: `'${ROOT_FOLDER_ID}' in parents and name='${safe(
-        u?.agencyName || u?.email || p.agentId
+        u?.agencyName || u?.email || String(p.agentId)
       )}' and trashed=false and mimeType='application/vnd.google-apps.folder'`,
       fields: "files(id,name)",
     });
@@ -250,7 +221,7 @@ const bookings: any[] = bookingSnaps.map(s => ({ id: s.id, ...s.data() }));
     if (!folderId) {
       const mk = await drive.files.create({
         requestBody: {
-          name: safe(u?.agencyName || u?.email || p.agentId),
+          name: safe(u?.agencyName || u?.email || String(p.agentId)),
           mimeType: "application/vnd.google-apps.folder",
           parents: [ROOT_FOLDER_ID],
         },
@@ -275,13 +246,13 @@ const bookings: any[] = bookingSnaps.map(s => ({ id: s.id, ...s.data() }));
     });
     const link = `https://drive.google.com/uc?id=${up.data.id}&export=download`;
 
-    // 10) обновить payout и счётчик
-    await db.doc(`payouts/${payoutId}`).update({ annexLink: link });
-    await db.doc(`users/${p.agentId}`).update({
-      annexCount: FieldValue.increment(1),
+    // 10) записываем ссылку в payout
+    await pRef.update({
+      annexLink: link,
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
-    return res.status(200).json({ link });
+    return res.status(200).json({ link, annexNumber });
   } catch (e: any) {
     console.error("Annex generation error:", e);
     return res.status(500).json({ error: e.message });

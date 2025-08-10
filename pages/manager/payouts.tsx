@@ -9,9 +9,9 @@ import {
   query,
   where,
   getDocs,
+  getDoc,
   doc,
   Timestamp,
-  updateDoc,
 } from "firebase/firestore";
 import { format, parseISO } from "date-fns";
 import { db } from "@/firebaseConfig";
@@ -26,9 +26,10 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import ManagerLayout from "@/components/layouts/ManagerLayout";
 import { getAllBalances, getAllPayouts } from "@/lib/finance";
-import { AGENT_WITHHOLD_PCT } from "@/lib/constants/fees"; // например, 0.12
+import { AGENT_WITHHOLD_PCT, OLIMPIA_WITHHOLD_PCT } from "@/lib/constants/fees";
+import dynamic from "next/dynamic";
+const ManagerLayout = dynamic(() => import("@/components/layouts/ManagerLayout"), { ssr: false });
 
 type Booking = {
   id: string;
@@ -128,8 +129,9 @@ export default function ManagerPayoutsPage() {
   }, [user, isManager, router]);
 
   /* --------------------- утилиты --------------------- */
-  const pct = AGENT_WITHHOLD_PCT ?? 0.12;
-  const toNet = (gross: number) => Math.max(0, Math.round(gross * (1 - pct) * 100) / 100);
+const [withholdPct, setWithholdPct] = useState<number>(AGENT_WITHHOLD_PCT);
+const pct = withholdPct ?? AGENT_WITHHOLD_PCT;
+const toNet = (gross: number) => Math.max(0, Math.round(gross * (1 - pct) * 100) / 100);
 
   // Маппер Firestore → Booking c попыткой восстановить paidGross из старых полей
   const mapDocToBooking = (d: any): Booking => {
@@ -166,7 +168,9 @@ export default function ManagerPayoutsPage() {
     setManualForm(f => ({ ...f, agentId }));
     const ag = balances.find(x => x.id === agentId);
     setManualBalance(ag?.balance ?? null);
-
+    const meta = agents.find(a => a.id === agentId);
+    const role = meta?.role || "agent";
+    setWithholdPct(role === "olimpya_agent" ? OLIMPIA_WITHHOLD_PCT : AGENT_WITHHOLD_PCT);
     setManualChecked(new Set());
     setManualAmountsGross({});
     setManualClose(new Set());
@@ -235,11 +239,11 @@ export default function ManagerPayoutsPage() {
             const remG = remainingGross(b);
             const payG = Math.min(remG, parseFloat(manualAmountsGross[id] || "0"));
             if (!(payG > 0)) return null;
-            return {
-              bookingId: id,
-              amountGross: Math.round(payG * 100) / 100,
-              closeFully: manualClose.has(id) || undefined,
-            };
+
+            // НЕ кладём undefined в closeFully
+            return manualClose.has(id)
+              ? { bookingId: id, amountGross: Math.round(payG * 100) / 100, closeFully: true }
+              : { bookingId: id, amountGross: Math.round(payG * 100) / 100 };
           })
           .filter(Boolean) as any[];
 
@@ -255,8 +259,8 @@ export default function ManagerPayoutsPage() {
         body: JSON.stringify({
           mode: "byBookings",
           agentId: manualForm.agentId,
-          items,                // брутто по позициям
-          withholdPct: pct,     // сервер посчитает нетто
+          items,                      // брутто по позициям
+          withholdPct: pct,           // сервер посчитает нетто
           transferFee: transferFeeNum, // вычитается после удержания
           comment: manualForm.comment, // попадёт в Anexa (общий комментарий выплаты)
         }),
@@ -318,22 +322,27 @@ export default function ManagerPayoutsPage() {
 
   /* ------------------- удаление и анекса ------------------- */
   // Удаляем через API, который возвращает баланс, но НЕ трогает отметки в booking'ах
-  const handleDelete = async (id: string) => {
-    if (!confirm("Удалить выплату? Баланс вернётся, отметки по броням останутся.")) return;
-    const r = await fetch("/api/delete-payout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ payoutId: id }),
-    });
-    if (r.ok) {
-      const pays = await getAllPayouts();
-      setPayouts(
-        (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
-      );
-    } else {
-      alert("Ошибка удаления");
-    }
-  };
+const handleDelete = async (id: string) => {
+  if (!confirm(
+    "Удалить выплату полностью?\n• Откатим отметки в бронях\n• Вернём баланс агенту\n• Удалим Anexa и откатим её счётчик"
+  )) return;
+
+  const r = await fetch("/api/delete-payout-deep", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payoutId: id }),
+  });
+
+  if (r.ok) {
+    const pays = await getAllPayouts();
+    setPayouts(
+      (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+    );
+  } else {
+    const { error } = await r.json().catch(() => ({ error: "" }));
+    alert(`Ошибка удаления: ${error || r.statusText}`);
+  }
+};
 
   const handleAnnex = async (id: string) => {
     if (!confirm("Сгенерировать Anexa (с суммами БРУТТО)?")) return;
@@ -351,20 +360,49 @@ export default function ManagerPayoutsPage() {
   };
 
   /* ------------------- редактор выплаты ------------------- */
-  const openEditor = (p: Payout) => {
-    setEditing(p);
-    setEditTransferFee(
-      p.transferFee != null ? String(p.transferFee) : ""
-    );
-    setEditComment(p.comment || "");
-    setEditItems(
-      (p.items || []).map(it => ({
-        ...it,
-        amountGross: Number(it.amountGross || 0),
-        amountNet: toNet(Number(it.amountGross || 0)),
-      }))
-    );
-  };
+  const openEditor = async (p: Payout) => {
+  setEditing(p);
+  setEditTransferFee(p.transferFee != null ? String(p.transferFee) : "");
+  setEditComment(p.comment || "");
+const meta = agents.find(a => a.id === p.agentId);
+const role = meta?.role || "agent";
+setWithholdPct(
+  typeof (p as any).withholdPct === "number"
+    ? (p as any).withholdPct
+    : role === "olimpya_agent" ? OLIMPIA_WITHHOLD_PCT : AGENT_WITHHOLD_PCT
+);
+  const baseItems = (p.items || []).map(it => ({
+    ...it,
+    amountGross: Number(it.amountGross || 0),
+    amountNet: toNet(Number(it.amountGross || 0)),
+  }));
+
+  // гидратация метаданных из bookings
+  const ids = Array.from(new Set(baseItems.map(i => i.bookingId)));
+  const metaById: Record<string, {bookingNumber?: string; hotel?: string; checkIn?: string; checkOut?: string}> = {};
+
+  await Promise.all(
+    ids.map(async (id) => {
+      const snap = await getDoc(doc(db, "bookings", id));
+      if (snap.exists()) {
+        const b = snap.data() as any;
+        metaById[id] = {
+          bookingNumber: b.bookingNumber || id,
+          hotel: b.hotel || "—",
+          checkIn: b.checkIn || "—",
+          checkOut: b.checkOut || "—",
+        };
+      }
+    })
+  );
+
+  setEditItems(
+    baseItems.map(it => ({
+      ...it,
+      ...(metaById[it.bookingId] || {}),
+    }))
+  );
+};
 
   const editTotalGross = useMemo(
     () => Math.round(editItems.reduce((s, it) => s + (Number(it.amountGross) || 0), 0) * 100) / 100,
@@ -381,10 +419,11 @@ export default function ManagerPayoutsPage() {
   );
 
   const setEditItemGross = (idx: number, val: string) => {
+    const v = parseFloat(val || "0") || 0;
     setEditItems(items =>
       items.map((it, i) =>
         i === idx
-          ? { ...it, amountGross: parseFloat(val || "0") || 0, amountNet: toNet(parseFloat(val || "0") || 0) }
+          ? { ...it, amountGross: v, amountNet: toNet(v) }
           : it
       )
     );
@@ -397,34 +436,51 @@ export default function ManagerPayoutsPage() {
   };
 
   const saveEditor = async () => {
-    if (!editing) return;
-    const payload = {
-      payoutId: editing.id,
-      transferFee: editTransferFeeNum,
-      comment: editComment,
-      withholdPct: pct,
-      items: editItems.map(it => ({
-        bookingId: it.bookingId,
-        amountGross: Math.round((it.amountGross || 0) * 100) / 100,
-        closeFully: !!it.closeFully,
-      })),
-    };
-    const r = await fetch("/api/update-payout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (r.ok) {
-      setEditing(null);
-      const pays = await getAllPayouts();
-      setPayouts(
-        (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
-      );
-    } else {
-      const { error } = await r.json().catch(() => ({ error: "" }));
-      alert(`Ошибка сохранения: ${error || r.statusText}`);
-    }
+  if (!editing) return;
+  const payload = {
+    payoutId: editing.id,
+    transferFee: editTransferFeeNum,
+    comment: editComment,
+    withholdPct: pct,
+    items: editItems.map(it => ({
+      bookingId: it.bookingId,
+      amountGross: Math.round((it.amountGross || 0) * 100) / 100,
+      closeFully: !!it.closeFully,
+    })),
   };
+  const r = await fetch("/api/update-payout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!r.ok) {
+    const { error } = await r.json().catch(() => ({ error: "" }));
+    alert(`Ошибка сохранения: ${error || r.statusText}`);
+    return;
+  }
+
+  // 1) Закрываем редактор
+  const resp = await r.json().catch(() => ({}));
+  setEditing(null);
+
+  // 2) Автоматически генерируем новую Anexa
+  const ga = await fetch("/api/generate-annex", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payoutId: resp.payoutId || editing.id }),
+  });
+
+  if (!ga.ok) {
+    alert("Изменения сохранены, но Anexa не перегенерировалась.");
+  }
+
+  // 3) Обновим список выплат
+  const pays = await getAllPayouts();
+  setPayouts(
+    (pays as Payout[]).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+  );
+};
 
   /* ------------------- фильтр выплат ------------------- */
   const filteredPayouts = payouts.filter(p => {

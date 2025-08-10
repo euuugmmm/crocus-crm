@@ -6,3 +6,4 @@ export const TOCO_MD_FEE = 0.02;        // 2.0 %
 export const OTHER_AGENT_PCT = 0.06;    // 6 %
 export const AGENT_TAX_EXPENSE_PCT = 0.10;   // реальный налог (расход компании)
 export const AGENT_WITHHOLD_PCT   = 0.12;   // удерживаем при выплате агенту
+export const OLIMPIA_WITHHOLD_PCT = 0.10;    // olimpya_agent — реальные 10%
