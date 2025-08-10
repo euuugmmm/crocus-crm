@@ -1,4 +1,4 @@
-// components/ManagerLayout.tsx
+// components/layouts/ManagerLayout.tsx
 "use client";
 
 import Link from "next/link";
@@ -9,17 +9,29 @@ import { useTranslation } from "next-i18next";
 import { Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+const DEFAULT_BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "CROCUS CRM";
+
 export default function ManagerLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { t, i18n } = useTranslation("common");
+  const { t, i18n, ready } = useTranslation("common");
   const { logout, userData } = useAuth();
 
+  // Безопасный t: если namespace не готов или ключ не найден — отдаём фолбэк
+  const safeT = (key: string, fallback?: string) => {
+    if (!ready) return fallback ?? key;
+    const val = t(key);
+    return val === key ? (fallback ?? key) : val;
+  };
+
+  // Заголовок бренда — одинаков на SSR и на клиенте
+  const brand = safeT("brand", DEFAULT_BRAND);
+
   const nav = [
-    { href: "/manager/bookings",   label: t("navBookings") },
-    { href: "/manager/balances",   label: t("navBalances") },
-    { href: "/manager/payouts",    label: t("navPayouts") },
-    { href: "/manager/users",      label: t("navUsers") },
-    { href: "/finance",            label: t("navFinance") },
+    { href: "/manager/bookings", label: safeT("navBookings", "Bookings") },
+    { href: "/manager/balances", label: safeT("navBalances", "Balances") },
+    { href: "/manager/payouts",  label: safeT("navPayouts",  "Payouts") },
+    { href: "/manager/users",    label: safeT("navUsers",    "Users") },
+    { href: "/finance",          label: safeT("navFinance",  "Finance") },
   ];
 
   const [showLangs, setShowLangs] = useState(false);
@@ -30,9 +42,8 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
   const isActive = (h: string) => router.pathname.startsWith(h);
 
   const changeLanguage = async (lng: string) => {
-    await i18n.changeLanguage(lng);
+    // достаточно router.push с locale; i18n.changeLanguage не обязателен
     setShowLangs(false);
-    // Перенавигация на ту же страницу с новым locale
     router.push(router.asPath, router.asPath, { locale: lng });
   };
 
@@ -54,7 +65,9 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
     <>
       <header className="w-full bg-white border-b shadow-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <span className="font-bold text-xl text-indigo-700">{t("brand")}</span>
+          <span className="font-bold text-xl text-indigo-700" suppressHydrationWarning>
+            {brand}
+          </span>
 
           <nav className="flex gap-6">
             {nav.map((n) => (
@@ -80,7 +93,7 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
                 className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-black"
               >
                 <Globe className="w-4 h-4" />
-                {t("language")}
+                {safeT("language", "Language")}
               </button>
               {showLangs && (
                 <div className="absolute right-0 mt-2 bg-white border rounded shadow-md z-50 py-2 min-w-[80px] flex flex-col gap-1">
@@ -121,13 +134,13 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
                     href="/manager/profile"
                     className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                   >
-                    {t("profile")}
+                    {safeT("profile", "Profile")}
                   </Link>
                   <button
                     className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 text-red-600"
                     onClick={logout}
                   >
-                    {t("logout")}
+                    {safeT("logout", "Logout")}
                   </button>
                 </div>
               )}

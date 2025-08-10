@@ -7,7 +7,6 @@ import ManagerLayout from "@/components/layouts/ManagerLayout";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-
 import {
   collection,
   getDocs,
@@ -16,6 +15,11 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
+import { serverSideTranslations } from "next-i18next/serverSideTranslations";
+
+export async function getServerSideProps({ locale }: { locale: string }) {
+  return { props: { ...(await serverSideTranslations(locale, ["common"])) } };
+}
 
 type AgentDoc = {
   id: string;
@@ -52,7 +56,6 @@ export default function ManagerBalances() {
     threshold: string;
   } | null>(null);
 
-  // Загружаем всех агентов (agent + olimpya_agent) и считаем баланс
   useEffect(() => {
     if (!user || !isManager) {
       router.replace("/login");
@@ -68,7 +71,6 @@ export default function ManagerBalances() {
   async function loadBalancesAll() {
     setLoading(true);
 
-    // 1) все агенты двух ролей
     const usersSnap = await getDocs(
       query(
         collection(db, "users"),
@@ -80,7 +82,6 @@ export default function ManagerBalances() {
       ...(d.data() as any),
     }));
 
-    // 2) все завершённые заявки (для всех агентов разом)
     const bookingsSnap = await getDocs(
       query(
         collection(db, "bookings"),
@@ -97,7 +98,6 @@ export default function ManagerBalances() {
       commByAgent.set(ag, (commByAgent.get(ag) || 0) + c);
     });
 
-    // 3) все выплаты (разом)
     const payoutsSnap = await getDocs(collection(db, "payouts"));
     const payByAgent = new Map<string, number>();
     payoutsSnap.docs.forEach((doc) => {
@@ -109,30 +109,23 @@ export default function ManagerBalances() {
       payByAgent.set(ag, (payByAgent.get(ag) || 0) + a);
     });
 
-    // 4) сводим
     const withBalance: AgentWithBalance[] = allAgents.map((a) => {
       const totalCom = commByAgent.get(a.id) || 0;
       const totalPay = payByAgent.get(a.id) || 0;
       return { ...a, balance: Math.round((totalCom - totalPay) * 100) / 100 };
     });
 
-    // сортируем по балансу по убыванию
     withBalance.sort((x, y) => (y.balance || 0) - (x.balance || 0));
 
     setAgents(withBalance);
     setLoading(false);
   }
 
-  // Ручной запуск завершения вчерашних броней
   const handleFinishYesterday = async () => {
     if (finishing) return;
     setFinishing(true);
     try {
-      const r = await fetch("/api/finish-bookings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}), // можно передать { upTo: "dd.MM.yyyy" }
-      });
+      const r = await fetch("/api/finish-bookings", { method: "POST" });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || r.statusText);
 
@@ -142,12 +135,8 @@ export default function ManagerBalances() {
         threshold: j.threshold,
       });
 
-      // после изменения статусов пересчитаем балансы
       await loadBalancesAll();
-
-      alert(
-        `Готово: проверено ${j.scanned}, завершено ${j.updated}, порог ${j.threshold}`
-      );
+      alert(`Готово: проверено ${j.scanned}, завершено ${j.updated}, порог ${j.threshold}`);
     } catch (e: any) {
       console.error(e);
       alert(`Ошибка: ${e.message}`);
