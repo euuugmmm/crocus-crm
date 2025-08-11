@@ -1,4 +1,3 @@
-/* pages/finance/accounts.tsx */
 "use client";
 
 import Head from "next/head";
@@ -8,7 +7,13 @@ import ManagerLayout from "@/components/layouts/ManagerLayout";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import {
-  collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, Timestamp, query,
+  collection,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  doc,
+  Timestamp,
+  query,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
@@ -17,18 +22,21 @@ type Account = {
   id: string;
   name: string;
   currency: Currency;
-  openingBalance?: number;         // в валюте счёта
+  openingBalance?: number;
   createdAt?: any;
   archived?: boolean;
 };
 
 type Tx = {
   id: string;
-  accountId: string;
-  side: "income" | "expense";
-  amount: number;                  // в валюте счёта
-  currency: Currency;              // дублируем валюту счёта для удобства
-  date: string;                    // YYYY-MM-DD
+  type: "in" | "out" | "transfer";
+  status: "planned" | "actual" | "reconciled";
+  date: string;
+  amount: { value: number; currency: Currency };
+  baseAmount: number; // уже в EUR
+  accountId?: string;        // для in/out
+  fromAccountId?: string;    // для transfer
+  toAccountId?: string;      // для transfer
 };
 
 type FxDoc = { id: string; base: "EUR"; rates: Partial<Record<Currency, number>> };
@@ -44,7 +52,7 @@ export default function FinanceAccounts() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
-  const [form, setForm] = useState<Pick<Account, "name"|"currency"|"openingBalance">>({
+  const [form, setForm] = useState<Pick<Account, "name" | "currency" | "openingBalance">>({
     name: "",
     currency: "EUR",
     openingBalance: 0,
@@ -62,7 +70,6 @@ export default function FinanceAccounts() {
     });
     const unsubFx = onSnapshot(query(collection(db, "finance_fxRates")), snap => {
       const list = snap.docs.map(d => ({ id:d.id, ...(d.data() as any) })) as FxDoc[];
-      // берём самый свежий по дате id (YYYY-MM-DD)
       const last = [...list].sort((a,b)=>a.id < b.id ? 1 : -1)[0];
       setFx(last || { id: "—", base: "EUR", rates: { RON: 4.97, USD: 1.08 } });
     });
@@ -74,23 +81,37 @@ export default function FinanceAccounts() {
     if (!amount) return 0;
     if (ccy === "EUR") return amount;
     const r = fx?.rates?.[ccy];
-    if (!r || r <= 0) return 0; // нет курса — считаем 0
-    // rates: 1 EUR = r(CCY) -> 1 CCY = 1/r EUR
+    if (!r || r <= 0) return 0;
     return amount / r;
   };
 
-  // агрегируем движения по каждому счёту
-  const movementsByAccount = useMemo(() => {
-    const map = new Map<string, { amt: number; eur: number }>();
-    for (const t of txs) {
-      const sign = t.side === "income" ? 1 : -1;
-      const prev = map.get(t.accountId) || { amt: 0, eur: 0 };
-      const deltaAmt = sign * (Number(t.amount) || 0);
-      const deltaEur = sign * eurFrom(Number(t.amount) || 0, t.currency);
-      map.set(t.accountId, { amt: prev.amt + deltaAmt, eur: prev.eur + deltaEur });
+const movementsByAccount = useMemo(() => {
+  const map = new Map<string, { amt: number; eur: number }>();
+  const add = (accId: string, deltaAmt: number, ccy: Currency, deltaEur: number) => {
+    const prev = map.get(accId) || { amt: 0, eur: 0 };
+    map.set(accId, { amt: prev.amt + deltaAmt, eur: prev.eur + deltaEur });
+  };
+
+  for (const t of txs) {
+    if (t.type === "transfer") {
+      // списать со from, зачислить на to (в валюте каждого счёта факт хранится как значение amount.value в валюте операции;
+      // для простоты считаем, что импорт по одному счёту: amount.value относится к fromAccountId)
+      if (t.fromAccountId) {
+        add(t.fromAccountId, -Number(t.amount.value || 0), t.amount.currency, -Number(t.baseAmount || 0));
+      }
+      if (t.toAccountId) {
+        add(t.toAccountId, +Number(t.amount.value || 0), t.amount.currency, +Number(t.baseAmount || 0));
+      }
+      continue;
     }
-    return map;
-  }, [txs, fx]);
+
+    // in/out
+    const sign = t.type === "in" ? +1 : -1;
+    const accId = t.accountId!;
+    add(accId, sign * Number(t.amount.value || 0), t.amount.currency, sign * Number(t.baseAmount || 0));
+  }
+  return map;
+}, [txs]);
 
   const rows = useMemo(() => {
     return accounts
@@ -98,9 +119,9 @@ export default function FinanceAccounts() {
       .map(a => {
         const mv = movementsByAccount.get(a.id) || { amt: 0, eur: 0 };
         const opening = Number(a.openingBalance || 0);
-        const balAmt = opening + mv.amt;           // в валюте счёта
+        const balAmt = opening + mv.amt;
         const openingEur = eurFrom(opening, a.currency);
-        const balEur = openingEur + mv.eur;        // в EUR
+        const balEur = openingEur + mv.eur;
         return { ...a, balAmt, balEur };
       });
   }, [accounts, movementsByAccount, fx]);
@@ -157,6 +178,12 @@ export default function FinanceAccounts() {
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold">Счета</h1>
           <div className="flex gap-2">
+            <Button
+              onClick={() => router.push("/finance/import/mt940")}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white h-9 px-3"
+            >
+              Импорт MT940
+            </Button>
             {accounts.length === 0 && (
               <Button onClick={seedBtEur} className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-3">
                 Создать BT EUR
@@ -192,8 +219,24 @@ export default function FinanceAccounts() {
                   <td className="border px-2 py-1">{a.balEur.toFixed(2)} €</td>
                   <td className="border px-2 py-1">
                     <div className="inline-flex gap-2">
-                      <button className="h-7 px-2 border rounded hover:bg-gray-100" onClick={() => openEdit(a)}>✏️</button>
-                      <button className="h-7 px-2 border rounded hover:bg-red-50" onClick={() => archive(a)}>🗂️ Архив</button>
+                      <button
+                        className="h-7 px-2 border rounded hover:bg-gray-100"
+                        onClick={() => openEdit(a)}
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        className="h-7 px-2 border rounded hover:bg-gray-100"
+                        onClick={() => router.push(`/finance/import/mt940?accountId=${a.id}`)}
+                      >
+                        ⬇️ Импорт
+                      </button>
+                      <button
+                        className="h-7 px-2 border rounded hover:bg-red-50"
+                        onClick={() => archive(a)}
+                      >
+                        🗂️ Архив
+                      </button>
                     </div>
                   </td>
                 </tr>

@@ -17,12 +17,14 @@ export type Category = {
 
 export type TxType = "in" | "out" | "transfer";
 export type TxStatus = "planned" | "actual" | "reconciled";
+export type TxSource = "manual" | "import";
 
 export type Transaction = {
   id: string;
   date: string;           // YYYY-MM-DD
   type: TxType;
   status?: TxStatus;
+  
 
   // Счета
   accountId?: string;     // для in/out
@@ -49,13 +51,19 @@ export type Transaction = {
   updatedAt?: any;
 
   accountName?: string;
+  source?: TxSource;          // "import" для импортированных
+  importBatchId?: string;     // id батча импорта
+  fingerprint?: string;       // защита от дублей
+  matchedPlannedId?: string;  // если сматчено с планом
+
+
 };
 
 export type Account = {
   id: string;
   name: string;
   currency: Currency;
-  openingBalance?: number;
+  openingBalance?: number;  
   isDefault?: boolean;
   archived?: boolean;
   createdAt?: any;
