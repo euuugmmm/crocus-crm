@@ -6,6 +6,8 @@ import ManagerLayout from "@/components/layouts/ManagerLayout";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import Head from "next/head";
+
 import {
   collection,
   getDocs,
@@ -157,6 +159,11 @@ export default function ManagerBalances() {
   };
 
   return (
+      <>
+        <Head>
+            <title>Балансы — CrocusCRM</title>
+          </Head>
+    
     <ManagerLayout>
       <Card className="max-w-7xl mx-auto mt-6">
         <CardContent className="p-6 space-y-4">
@@ -240,5 +247,6 @@ export default function ManagerBalances() {
         </CardContent>
       </Card>
     </ManagerLayout>
+      </>
   );
 }

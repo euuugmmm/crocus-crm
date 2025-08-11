@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import Head from "next/head";
 import {
   collection,
   onSnapshot,
@@ -277,6 +278,10 @@ export default function ManagerUsers() {
   };
 
   return (
+      <>
+      <Head>
+        <title>Пользователи — CrocusCRM</title>
+      </Head>
     <ManagerLayout>
       <main className="max-w-7xl mx-auto p-4">
         {/* Шапка и инструменты */}
@@ -613,6 +618,7 @@ export default function ManagerUsers() {
         )}
       </main>
     </ManagerLayout>
+    </>
   );
 }
 
