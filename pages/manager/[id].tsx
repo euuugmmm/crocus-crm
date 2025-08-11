@@ -26,6 +26,7 @@ import UploadScreenshots from "@/components/UploadScreenshots";
 import { Button } from "@/components/ui/button";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
 import { serverSideTranslations } from "next-i18next/serverSideTranslations";
+import BookingFinancePanel from "@/components/finance/BookingFinancePanel";
 
 export async function getServerSideProps({ locale }: { locale: string }) {
   return { props: { ...(await serverSideTranslations(locale, ["common"])) } };
@@ -72,6 +73,16 @@ export default function EditBookingPage() {
     })();
   }, [id, isManager, isSupermanager, isAdmin]);
 
+<BookingFinancePanel
+  bookingId={booking.id}
+  booking={{
+    bruttoClient: booking.bruttoClient,
+    internalNet: booking.internalNet,
+    agentCommission: booking.agentCommission, // если есть
+    createdAt: booking.createdAt,
+    checkIn: booking.checkIn,
+  }}
+/>
   // Загрузка комментариев
   useEffect(() => {
     (async () => {
