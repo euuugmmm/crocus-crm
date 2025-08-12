@@ -4,14 +4,25 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useAuth } from "@/context/AuthContext";
-import { Button } from "@/components/ui/button";
 import { useTranslation } from "next-i18next";
 import { Globe } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 const DEFAULT_BRAND = process.env.NEXT_PUBLIC_BRAND_NAME || "CROCUS CRM";
 
-export default function ManagerLayout({ children }: { children: React.ReactNode }) {
+type Props = {
+  children: React.ReactNode;
+  /** Растягиваем шапку (header) на всю ширину окна */
+  fullWidthHeader?: boolean;
+  /** Растягиваем основной контент (main) на всю ширину окна */
+  fullWidthMain?: boolean;
+};
+
+export default function ManagerLayout({
+  children,
+  fullWidthHeader = false,
+  fullWidthMain = false,
+}: Props) {
   const router = useRouter();
   const { t, i18n, ready } = useTranslation("common");
   const { logout, userData } = useAuth();
@@ -23,7 +34,6 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
     return val === key ? (fallback ?? key) : val;
   };
 
-  // Заголовок бренда — одинаков на SSR и на клиенте
   const brand = safeT("brand", DEFAULT_BRAND);
 
   const nav = [
@@ -31,6 +41,7 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
     { href: "/manager/balances", label: safeT("navBalances", "Balances") },
     { href: "/manager/payouts",  label: safeT("navPayouts",  "Payouts") },
     { href: "/manager/users",    label: safeT("navUsers",    "Users") },
+    // если основная точка входа — сразу на транзакции, можно поставить "/finance/transactions"
     { href: "/finance",          label: safeT("navFinance",  "Finance") },
   ];
 
@@ -42,7 +53,6 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
   const isActive = (h: string) => router.pathname.startsWith(h);
 
   const changeLanguage = async (lng: string) => {
-    // достаточно router.push с locale; i18n.changeLanguage не обязателен
     setShowLangs(false);
     router.push(router.asPath, router.asPath, { locale: lng });
   };
@@ -64,17 +74,23 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
   return (
     <>
       <header className="w-full bg-white border-b shadow-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div
+          className={
+            fullWidthHeader
+              ? "w-full px-4 py-3 flex items-center justify-between"
+              : "max-w-7xl mx-auto px-4 py-3 flex items-center justify-between"
+          }
+        >
           <span className="font-bold text-xl text-indigo-700" suppressHydrationWarning>
             {brand}
           </span>
 
-          <nav className="flex gap-6">
+          <nav className="flex gap-2 sm:gap-4">
             {nav.map((n) => (
               <Link
                 key={n.href}
                 href={n.href}
-                className={`text-sm font-medium transition-colors duration-200 px-3 py-2 rounded-md ${
+                className={`text-sm font-medium transition-colors duration-200 px-2 sm:px-3 py-2 rounded-md ${
                   isActive(n.href)
                     ? "bg-indigo-100 text-indigo-800"
                     : "text-gray-600 hover:text-black hover:bg-gray-100"
@@ -125,7 +141,7 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
                 </div>
               </button>
               {showUserMenu && (
-                <div className="absolute right-0 mt-2 bg-white border rounded shadow-md w-40 z-50">
+                <div className="absolute right-0 mt-2 bg-white border rounded shadow-md w-44 z-50">
                   <div className="px-4 py-2 text-sm text-gray-600">
                     {userData?.managerName ?? "Manager"}
                   </div>
@@ -149,7 +165,15 @@ export default function ManagerLayout({ children }: { children: React.ReactNode 
         </div>
       </header>
 
-      <main className="w-full px-4 py-6">{children}</main>
+      <main
+        className={
+          fullWidthMain
+            ? "w-full max-w-none px-4 py-6"
+            : "mx-auto max-w-7xl px-4 py-6"
+        }
+      >
+        {children}
+      </main>
     </>
   );
 }

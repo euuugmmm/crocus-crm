@@ -235,7 +235,7 @@ export default function ManagerBookings() {
   return (
     <>
       <Head><title>Заявки — CrocusCRM</title></Head>
-      <ManagerLayout>
+      <ManagerLayout fullWidthHeader fullWidthMain>
         <Card className="w-full mx-auto mt-6">
           <CardContent className="p-6">
             <div className="flex justify-between items-center mb-4">
