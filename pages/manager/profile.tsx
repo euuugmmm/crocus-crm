@@ -59,7 +59,7 @@ export default function ManagerProfilePage() {
   }
 
   return (
-    <ManagerLayout>
+    <ManagerLayout fullWidthHeader fullWidthMain>
       <main className="max-w-4xl mx-auto p-6 space-y-8">
         {/* Telegram и уведомления */}
         <section className="bg-white rounded shadow p-6 space-y-6">

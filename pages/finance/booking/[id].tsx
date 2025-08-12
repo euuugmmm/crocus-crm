@@ -129,6 +129,9 @@ export default function FinanceBookingPage() {
     note: "",
   });
 
+  // inline edit (по двойному клику)
+  const [editing, setEditing] = useState<{ id?: string; field?: "baseAmount" | "amount"; value?: number }>({});
+
   useEffect(() => {
     if (!router.isReady) return;
     if (!user || !canView) { router.replace("/login"); return; }
@@ -167,6 +170,13 @@ export default function FinanceBookingPage() {
     if (!r || r <= 0) return 0;
     return amount / r;
   };
+  const ccyFromEur = (eur: number, ccy: Currency): number => {
+    if (!eur) return 0;
+    if (ccy === "EUR") return eur;
+    const r = fx?.rates?.[ccy];
+    if (!r || r <= 0) return 0;
+    return eur * r;
+  };
 
   // вычисления (информативные — без редактирования)
   const brutto = n(booking?.bruttoClient);
@@ -202,7 +212,7 @@ export default function FinanceBookingPage() {
       const parts = splitAmount(brutto - netCrocus, owners);
       const m: Record<string, number> = {};
       parts.forEach(p => m[p.name] = n(m[p.name]) + n(p.amount));
-      return { Igor: +n(m["Igor"]).toFixed(2), Evgeniy: +n(m["Evgeniy"]).toFixed(2) };
+      return { Igor: +n(m["Igor"]).toFixed(2), Evgeniy: +n(m["Еvgeniy"]).toFixed(2) };
     }
   }, [booking, owners, baseCommission, brutto, netCrocus]);
 
@@ -310,8 +320,8 @@ export default function FinanceBookingPage() {
     if (!booking?.id) return;
     // дата плана: по checkIn, иначе по createdAt, иначе сегодня (локально)
     const due =
-      booking.checkIn ? String(booking.checkIn).match(/^\d{4}-\d{2}-\d{2}$/) ? String(booking.checkIn) : localISO(new Date(booking.createdAt?.toDate?.() ?? booking.checkIn))
-      : booking.createdAt?.toDate ? localISO(booking.createdAt.toDate())
+      booking?.checkIn ? String(booking.checkIn).match(/^\d{4}-\d{2}-\d{2}$/) ? String(booking.checkIn) : localISO(new Date(booking.createdAt?.toDate?.() ?? booking.checkIn))
+      : booking?.createdAt?.toDate ? localISO(booking.createdAt.toDate())
       : localISO(new Date());
 
     if (brutto > 0) {
@@ -349,7 +359,7 @@ export default function FinanceBookingPage() {
   const createOwnerPayoutPlans = async () => {
     if (!booking?.id) return;
     const base = crocusAmount;
-    const parts = splitAmount(base, owners, booking.owners)
+    const parts = splitAmount(base, owners, booking?.owners)
       .filter(p => p.name === "Igor" || p.name === "Evgeniy");
     const due = localISO(new Date());
 
@@ -391,33 +401,61 @@ export default function FinanceBookingPage() {
   const bruttoCls = payClass(fact.inEUR, brutto);
   const netCls = payClass(fact.outEUR, netCrocus);
 
+  // авто-создание «плана по умолчанию» если транзакций нет (один раз за сессию страницы)
+  const [autoPlanDone, setAutoPlanDone] = useState(false);
+  useEffect(() => {
+    if (!autoPlanDone && booking?.id && txs.length === 0) {
+      createDefaultPlan().finally(() => setAutoPlanDone(true));
+    }
+  }, [autoPlanDone, booking?.id, txs.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // commit inline edit
+  const commitEdit = async () => {
+    if (!editing.id || editing.value === undefined) { setEditing({}); return; }
+    const t = txs.find(x => x.id === editing.id);
+    if (!t) { setEditing({}); return; }
+    try {
+      if (editing.field === "baseAmount") {
+        const newBase = +n(editing.value).toFixed(2);
+        const newAmt = +ccyFromEur(newBase, (t.currency as Currency) || "EUR").toFixed(2);
+        await updateDoc(doc(db, "finance_transactions", editing.id), { baseAmount: newBase, amount: newAmt });
+      } else {
+        const newAmt = +n(editing.value).toFixed(2);
+        const newBase = +eurFrom(newAmt, (t.currency as Currency) || "EUR").toFixed(2);
+        await updateDoc(doc(db, "finance_transactions", editing.id), { amount: newAmt, baseAmount: newBase });
+      }
+    } finally {
+      setEditing({});
+    }
+  };
+
   return (
     <ManagerLayout>
       <Head><title>Заявка: финансы</title></Head>
 
       <div className="max-w-6xl mx-auto py-6 space-y-6">
 
-        {/* Шапка-инфо (только просмотр) */}
+        {/* Шапка-инфо */}
         <div className="rounded-xl border p-4 bg-white">
-          <div className="text-xs text-gray-500 mb-1">Заявка</div>
-          <div className="text-2xl font-bold">
-            {(booking?.bookingNumber || "—") + " • " + (booking?.hotel || "—")}
-          </div>
-          <div className="text-sm text-gray-700 mt-1">
-            {(booking?.operator || "—") + " • " + (booking?.agentName || "—")}
-          </div>
-          <div className="text-sm text-gray-700">
-            {fmtDate(booking?.checkIn)} → {fmtDate(booking?.checkOut)} • Плательщик: {booking?.payerName || "—"}
-          </div>
-
-          <div className="mt-3 flex items-center gap-3">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={backoffice} onChange={toggleBackoffice} />
-              Заведено в бэкофис
-            </label>
-            <Button variant="outline" onClick={() => router.push("/finance/bookings-finance")}>
-              ← К списку
-            </Button>
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Заявка</div>
+              <div className="text-[17px] sm:text-lg font-semibold">
+                {(booking?.bookingNumber || "—")} • {booking?.hotel || "—"} • {fmtDate(booking?.checkIn)} → {fmtDate(booking?.checkOut)}
+              </div>
+              <div className="text-sm text-gray-700 mt-1">
+                {(booking?.operator || "—")} • {(booking?.agentName ? `${booking.agentName} (Агентство)` : "—")} • Плательщик: {booking?.payerName || "—"}
+              </div>
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <label className="inline-flex items-center gap-2 text-sm border rounded px-3 py-1 bg-gray-50">
+                <input type="checkbox" checked={backoffice} onChange={toggleBackoffice} />
+                Заведено в бэкофис
+              </label>
+              <Button variant="outline" onClick={() => router.push("/finance/bookings-finance")} className="h-8 px-3 text-sm">
+                ← К списку
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -471,7 +509,7 @@ export default function FinanceBookingPage() {
           </CardContent>
         </Card>
 
-        {/* Транзакции: план/факт, с редактируемым сроком у плана */}
+        {/* Транзакции: план/факт, с редактируемым сроком у плана и inline-правкой сумм */}
         <Card>
           <CardContent className="p-4 space-y-4">
             <div className="flex items-center justify-between">
@@ -486,29 +524,56 @@ export default function FinanceBookingPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[950px] border text-sm">
+              <table className="w-full min-w-[980px] border text-sm">
                 <thead className="bg-gray-100 text-center">
                   <tr>
                     <th className="border px-2 py-1">Тип</th>
                     <th className="border px-2 py-1">Статус</th>
-                    <th className="border px-2 py-1">Сумма, €</th>
+                    <th className="border px-2 py-1 w-[100px]">EUR</th>
                     <th className="border px-2 py-1">Срок/Дата</th>
                     <th className="border px-2 py-1">Счёт / сумма</th>
                     <th className="border px-2 py-1">Описание</th>
-                    <th className="border px-2 py-1 w-[220px]">Действия</th>
+                    <th className="border px-2 py-1 w-[240px]">Действия</th>
                   </tr>
                 </thead>
                 <tbody>
                   {[...planned, ...facts].map((t) => {
                     const acc = accounts.find((a) => a.id === t.accountId);
                     const accLabel = acc ? `${acc.name} (${acc.currency})` : "—";
+                    const isEditingEUR = editing.id === t.id && editing.field === "baseAmount";
+                    const isEditingAmt = editing.id === t.id && editing.field === "amount";
+
                     return (
                       <tr key={t.id} className="text-center border-t">
                         <td className="border px-2 py-1">{t.type === "in" ? "Поступление" : "Оплата"}</td>
                         <td className="border px-2 py-1">
                           {t.status === "planned" ? "План" : t.status === "actual" ? "Факт" : "Сверено"}
                         </td>
-                        <td className="border px-2 py-1 text-right">{fmt2(t.baseAmount)} €</td>
+                        {/* EUR editable */}
+                        <td
+                          className="border px-2 py-1 text-right"
+                          onDoubleClick={() => setEditing({ id: t.id, field: "baseAmount", value: n(t.baseAmount) })}
+                        >
+                          {isEditingEUR ? (
+                            <input
+                              autoFocus
+                              type="number"
+                              step="0.01"
+                              className="w-28 border rounded px-1 py-1 text-right"
+                              value={editing.value ?? 0}
+                              onChange={(e) => setEditing(prev => ({ ...prev, value: Number(e.target.value) }))}
+                              onBlur={commitEdit}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") commitEdit();
+                                if (e.key === "Escape") setEditing({});
+                              }}
+                            />
+                          ) : (
+                            `${fmt2(t.baseAmount)} €`
+                          )}
+                        </td>
+
+                        {/* Дата */}
                         <td className="border px-2 py-1">
                           {t.status === "planned" ? (
                             <input
@@ -521,9 +586,36 @@ export default function FinanceBookingPage() {
                             t.actualDate || t.date || "—"
                           )}
                         </td>
-                        <td className="border px-2 py-1">
-                          {accLabel}{t.amount ? ` • ${fmt2(t.amount)} ${t.currency}` : ""}
+
+                        {/* Счёт / сумма editable */}
+                        <td
+                          className="border px-2 py-1"
+                          onDoubleClick={() => setEditing({ id: t.id, field: "amount", value: n(t.amount) })}
+                        >
+                          <div className="flex items-center justify-center gap-1">
+                            <span>{accLabel}</span>
+                            {t.amount ? (
+                              isEditingAmt ? (
+                                <input
+                                  autoFocus
+                                  type="number"
+                                  step="0.01"
+                                  className="w-28 border rounded px-1 py-1 text-right"
+                                  value={editing.value ?? 0}
+                                  onChange={(e) => setEditing(prev => ({ ...prev, value: Number(e.target.value) }))}
+                                  onBlur={commitEdit}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") commitEdit();
+                                    if (e.key === "Escape") setEditing({});
+                                  }}
+                                />
+                              ) : (
+                                <span>• {fmt2(t.amount)} {t.currency}</span>
+                              )
+                            ) : null}
+                          </div>
                         </td>
+
                         <td className="border px-2 py-1 text-left">{t.title || t.note || "—"}</td>
                         <td className="border px-2 py-1">
                           <div className="flex flex-wrap gap-2 justify-center">

@@ -164,7 +164,7 @@ export default function ManagerBalances() {
             <title>Балансы — CrocusCRM</title>
           </Head>
     
-    <ManagerLayout>
+    <ManagerLayout fullWidthHeader fullWidthMain>
       <Card className="max-w-7xl mx-auto mt-6">
         <CardContent className="p-6 space-y-4">
           <div className="flex items-center justify-between gap-3">

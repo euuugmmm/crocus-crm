@@ -514,7 +514,7 @@ export default function ManagerPayoutsPage() {
       <Head>
         <title>Выплаты агентам — CrocusCRM</title>
       </Head>
-      <ManagerLayout>
+    <ManagerLayout fullWidthHeader fullWidthMain>
         {/* Ручная выплата */}
         <Card>
           <CardContent className="space-y-4">

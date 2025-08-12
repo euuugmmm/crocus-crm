@@ -206,7 +206,7 @@ export default function EditBookingPage() {
         <title>CROCUS CRM – {booking.bookingNumber}</title>
       </Head>
 
-      <ManagerLayout>
+    <ManagerLayout fullWidthHeader fullWidthMain>
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
           <h1 className="text-2xl font-bold">Редактировать заявку: {booking.bookingNumber}</h1>
 

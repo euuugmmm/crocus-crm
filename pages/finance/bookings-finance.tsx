@@ -21,6 +21,7 @@ import { DownloadTableExcel } from "react-export-table-to-excel";
 import { loadOwners, splitAmount } from "@/lib/finance/owners";
 import { useTranslation } from "next-i18next";
 import { serverSideTranslations } from "next-i18next/serverSideTranslations";
+import { Edit3 } from "lucide-react";
 
 // утилиты, как у менеджера
 import { fmtDate as fmtDateUtil, toDate } from "@/lib/utils/dates";
@@ -30,6 +31,11 @@ import { fixed2, toNumber } from "@/lib/utils/numbers";
 const n = (v: any) => Number(v ?? 0) || 0;
 const fmt2 = (v: any) => n(v).toFixed(2);
 const fmtDate = (v: any) => fmtDateUtil(v);
+const padISO = (d: Date) => {
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return z.toISOString().slice(0, 10);
+};
+const todayISO = () => padISO(new Date());
 
 // данные заявки
 type Booking = {
@@ -60,6 +66,7 @@ type Booking = {
   owners?: Array<{ ownerId?: string; name?: string; share?: number }>;
 
   backofficeEntered?: boolean;
+  backofficePosted?: boolean; // добавили для единого флага
 };
 
 // транзакции (лайт для сверки)
@@ -89,7 +96,53 @@ export default function BookingsFinanceReport() {
   const [txs, setTxs] = useState<TxLite[]>([]);
   const tableRef = useRef<HTMLTableElement | null>(null);
 
-  // фильтры — как у /manager/bookings
+  // быстрые пресеты дат
+  const [datePresets] = useState([
+    {
+      label: "Этот месяц",
+      get: () => {
+        const d = new Date();
+        const from = new Date(d.getFullYear(), d.getMonth(), 1);
+        const to = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+        return { from: padISO(from), to: padISO(to) };
+      },
+    },
+    {
+      label: "Прошлый месяц",
+      get: () => {
+        const d = new Date();
+        d.setMonth(d.getMonth() - 1);
+        const from = new Date(d.getFullYear(), d.getMonth(), 1);
+        const to = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+        return { from: padISO(from), to: padISO(to) };
+      },
+    },
+    {
+      label: "Последние 30 дней",
+      get: () => {
+        const to = new Date();
+        const from = new Date();
+        from.setDate(from.getDate() - 29);
+        return { from: padISO(from), to: padISO(to) };
+      },
+    },
+    {
+      label: "Эта неделя",
+      get: () => {
+        const d = new Date();
+        const day = (d.getDay() + 6) % 7;
+        const from = new Date(d);
+        from.setDate(d.getDate() - day);
+        from.setHours(0, 0, 0, 0);
+        const to = new Date(from);
+        to.setDate(from.getDate() + 6);
+        to.setHours(23, 59, 59, 999);
+        return { from: padISO(from), to: padISO(to) };
+      },
+    },
+  ]);
+
+  // ФИЛЬТРЫ — возвращаем к предыдущей версии (вид + логика)
   const [filters, setFilters] = useState({
     bookingType: "",
     dateFrom: "",
@@ -104,7 +157,7 @@ export default function BookingsFinanceReport() {
     checkOutTo: "",
     bruttoClient: "",
     internalNet: "",
-    crocusAmount: "", // «Комиссия Crocus» (универсальная: Olimpya=комиссия, Subagent=прибыль Crocus)
+    crocusAmount: "", // «Комиссия Crocus» (Olimpya=комиссия, Subagent=брутто-нетто)
     search: "",
     backoffice: "all" as "all" | "yes" | "no",
   });
@@ -164,7 +217,7 @@ export default function BookingsFinanceReport() {
     return map;
   }, [txs]);
 
-  // фильтрация — как у менеджера
+  // фильтрация — оригинальная логика из предыдущей версии
   const filtered = useMemo(() => {
     const createdFrom = filters.dateFrom ? new Date(filters.dateFrom) : null;
     const createdTo = filters.dateTo ? new Date(filters.dateTo) : null;
@@ -195,7 +248,7 @@ export default function BookingsFinanceReport() {
         if (!((b.operator || "").toLowerCase().includes(filters.operator.toLowerCase()))) return false;
         if (!((b.hotel || "").toLowerCase().includes(filters.hotel.toLowerCase()))) return false;
 
-        // суммы (точное совпадение)
+        // суммы (точное совпадение, как раньше)
         if (filters.bruttoClient && fixed2(b.bruttoClient) !== fixed2(filters.bruttoClient)) return false;
         if (filters.internalNet && fixed2(b.internalNet) !== fixed2(filters.internalNet)) return false;
 
@@ -203,7 +256,7 @@ export default function BookingsFinanceReport() {
         if (filters.crocusAmount) {
           const brutto = toNumber(b.bruttoClient);
           const netCrocus = toNumber(b.internalNet);
-          const komis = toNumber(b.realCommission) || toNumber(b.commission) || (brutto - netCrocus);
+          const komis = toNumber((b as any).realCommission) || toNumber((b as any).commission) || (brutto - netCrocus);
           const crocusAmount = b.bookingType === "olimpya_base" ? komis : (brutto - netCrocus);
           if (fixed2(crocusAmount) !== fixed2(filters.crocusAmount)) return false;
         }
@@ -212,9 +265,10 @@ export default function BookingsFinanceReport() {
         if (filters.bookingType && !(b.bookingType || "").toLowerCase().includes(filters.bookingType.toLowerCase()))
           return false;
 
-        // бэкофис
-        if (filters.backoffice === "yes" && !b.backofficeEntered) return false;
-        if (filters.backoffice === "no" && b.backofficeEntered) return false;
+        // бэкофис (единый флаг)
+        const backoffice = !!(b.backofficePosted ?? b.backofficeEntered);
+        if (filters.backoffice === "yes" && !backoffice) return false;
+        if (filters.backoffice === "no" && backoffice) return false;
 
         // общий поиск
         const q = filters.search.trim().toLowerCase();
@@ -294,14 +348,14 @@ export default function BookingsFinanceReport() {
       const netCrocus = n(b.internalNet);
       const netOlimp = n(b.nettoOlimpya) || netCrocus;
 
-      const baseCommission = n(b.realCommission) || n(b.commission) || (brutto - netCrocus);
+      const baseCommission = n((b as any).realCommission) || n((b as any).commission) || (brutto - netCrocus);
       const crocusAmount = b.bookingType === "olimpya_base" ? baseCommission : (brutto - netCrocus);
 
       const over = n(b.overCommission) || (brutto - netOlimp);
 
       const presetSplit: Array<{ name: string; amount: number }> = [];
-      if (n(b.commissionIgor)) presetSplit.push({ name: "Igor", amount: +n(b.commissionIgor).toFixed(2) });
-      if (n(b.commissionEvgeniy)) presetSplit.push({ name: "Evgeniy", amount: +n(b.commissionEvgeniy).toFixed(2) });
+      if (n((b as any).commissionIgor)) presetSplit.push({ name: "Igor", amount: +n((b as any).commissionIgor).toFixed(2) });
+      if (n((b as any).commissionEvgeniy)) presetSplit.push({ name: "Evgeniy", amount: +n((b as any).commissionEvgeniy).toFixed(2) });
 
       const parts =
         b.bookingType === "olimpya_base"
@@ -321,6 +375,9 @@ export default function BookingsFinanceReport() {
       const inFact = facts?.inEUR || 0;
       const outFact = facts?.outEUR || 0;
 
+      const inPct = brutto > 0 ? Math.max(0, Math.min(1, inFact / brutto)) : 0;
+      const outPct = netCrocus > 0 ? Math.max(0, Math.min(1, outFact / netCrocus)) : 0;
+
       return {
         ...b,
         brutto,
@@ -332,6 +389,8 @@ export default function BookingsFinanceReport() {
         Evgeniy: +Evgeniy.toFixed(2),
         inFact,
         outFact,
+        inPct,
+        outPct,
       };
     });
   }, [filtered, owners, factByBooking]);
@@ -348,6 +407,11 @@ export default function BookingsFinanceReport() {
       Igor: sum(data, "Igor"),
       Evgeniy: sum(data, "Evgeniy"),
       count: data.length,
+      marginPct: (() => {
+        const sales = sum(data, "brutto");
+        const company = sum(data, "crocusAmount");
+        return sales > 0 ? (company / sales) * 100 : 0;
+      })(),
     };
   }, [data]);
 
@@ -359,37 +423,105 @@ export default function BookingsFinanceReport() {
     return "bg-amber-50 text-amber-800";
   };
 
-  // бэкофис toggle
+  // бэкофис toggle — обновляем ОДНОВРЕМЕННО оба поля
   const toggleBackoffice = async (row: Booking) => {
     if (!row.id) return;
-    await updateDoc(doc(db, "bookings", row.id), { backofficeEntered: !row.backofficeEntered });
+    const current = !!(row.backofficePosted ?? row.backofficeEntered);
+    const v = !current;
+    await updateDoc(doc(db, "bookings", row.id), {
+      backofficePosted: v,
+      backofficeEntered: v,
+    });
   };
 
   const editHref = (b: Booking) => `/finance/booking/${b.id}`;
+
+  // экспорт — имя файла с периодом
+  const exportName = `bookings_finance_${filters.dateFrom || "all"}_${filters.dateTo || todayISO()}`;
+
+  // сброс фильтров
+  const resetFilters = () =>
+    setFilters({
+      bookingType: "",
+      dateFrom: "",
+      dateTo: "",
+      bookingNumber: "",
+      agentName: "",
+      operator: "",
+      hotel: "",
+      checkInFrom: "",
+      checkInTo: "",
+      checkOutFrom: "",
+      checkOutTo: "",
+      bruttoClient: "",
+      internalNet: "",
+      crocusAmount: "",
+      search: "",
+      backoffice: "all",
+    });
 
   return (
     <>
       <Head>
         <title>Финансы по заявкам</title>
       </Head>
-    <ManagerLayout fullWidthHeader fullWidthMain>
-        <Card className="w-full mx-auto mt-6">
-          <CardContent className="p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h1 className="text-2xl font-bold">Финансы по заявкам</h1>
-              <DownloadTableExcel filename="bookings_finance" sheet="report" currentTableRef={tableRef.current}>
-                <Button className="bg-green-600 hover:bg-green-700 text-white">Экспорт в Excel</Button>
-              </DownloadTableExcel>
-            </div>
+      <ManagerLayout fullWidthHeader fullWidthMain>
+        {/* KPI-панель */}
+        <div className="w-full px-4 pt-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="rounded-xl border bg-white p-4">
+            <div className="text-xs text-gray-600">Заявок</div>
+            <div className="text-2xl font-semibold mt-1">{totals.count}</div>
+          </div>
+          <div className="rounded-xl border bg-white p-4">
+            <div className="text-xs text-gray-600">Продажи (брутто)</div>
+            <div className="text-2xl font-semibold mt-1">{fmt2(totals.brutto)} €</div>
+          </div>
+          <div className="rounded-xl border bg-white p-4">
+            <div className="text-xs text-gray-600">Комиссия Crocus</div>
+            <div className="text-2xl font-semibold mt-1">{fmt2(totals.crocusAmount)} €</div>
+          </div>
+          <div className="rounded-xl border bg-white p-4">
+            <div className="text-xs text-gray-600">Маржа / Продажи</div>
+            <div className="text-2xl font-semibold mt-1">{totals.marginPct.toFixed(1)}%</div>
+          </div>
+        </div>
 
+        {/* Панель действий */}
+        <div className="w-full px-4 mt-4 flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex flex-wrap gap-2">
+            {datePresets.map((p) => (
+              <button
+                key={p.label}
+                className="text-sm px-3 py-1.5 rounded-lg border hover:bg-gray-50"
+                onClick={() => {
+                  const r = p.get();
+                  setFilters((f) => ({ ...f, dateFrom: r.from, dateTo: r.to }));
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <DownloadTableExcel filename={exportName} sheet="report" currentTableRef={tableRef.current}>
+              <Button className="bg-green-600 hover:bg-green-700 text-white">Экспорт в Excel</Button>
+            </DownloadTableExcel>
+            <Button variant="outline" onClick={resetFilters}>
+              Сбросить фильтры
+            </Button>
+          </div>
+        </div>
+
+        <Card className="w-full mx-auto mt-4">
+          <CardContent className="p-0">
             <div className="overflow-x-auto">
               <table ref={tableRef} className="min-w-[1850px] w-full border text-sm">
-                <thead className="bg-gray-100 text-center">
+                <thead className="bg-gray-100 text-center sticky top-0 z-10">
                   <tr>
                     <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("type")}>
                       Тип
                     </th>
-                    <th className="px-2 py-1 border w-[100px] cursor-pointer" onClick={() => requestSort("date")}>
+                    <th className="px-2 py-1 border w=[100px] cursor-pointer" onClick={() => requestSort("date")}>
                       Дата
                     </th>
                     <th className="px-2 py-1 border w-[80px] cursor-pointer" onClick={() => requestSort("bookingNumber")}>
@@ -432,7 +564,7 @@ export default function BookingsFinanceReport() {
                     <th className="px-2 py-1 border w-[90px]">Действие</th>
                   </tr>
 
-                  {/* строка фильтров — как у менеджера */}
+                  {/* СТРОКА ФИЛЬТРОВ — ВИД КАК В ПРЕДЫДУЩЕЙ ВЕРСИИ */}
                   <tr className="bg-white text-center text-xs">
                     <th className="px-1 py-0.5 border">
                       <Input
@@ -578,66 +710,90 @@ export default function BookingsFinanceReport() {
 
                     const bruttoCls = payClass(b.inFact, b.brutto);
                     const netCls = payClass(b.outFact, b.netCrocus);
+                    const backoffice = !!(b.backofficePosted ?? b.backofficeEntered);
+
+                    const inPct = Math.round((b.inPct || 0) * 100);
+                    const outPct = Math.round((b.outPct || 0) * 100);
+
+                    const bar = (pct: number, okColor: string) => (
+                      <div className="w-full h-2 bg-gray-200 rounded overflow-hidden mt-1">
+                        <div
+                          className={`h-full ${pct >= 100 ? okColor : "bg-amber-500"}`}
+                          style={{ width: `${Math.min(100, pct)}%` }}
+                          title={`${pct}%`}
+                        />
+                      </div>
+                    );
 
                     return (
                       <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
-                        <td className="px-2 py-1 border">{b.bookingType === "olimpya_base" ? "Olimpya" : "Субагент"}</td>
-                        <td className="px-2 py-1 border whitespace-nowrap">{fmtDate(b.createdAt)}</td>
-                        <td className="px-2 py-1 border whitespace-nowrap">{b.bookingNumber || "—"}</td>
-                        <td className="px-2 py-1 border truncate">{b.agentName || "—"}</td>
-                        <td className="px-2 py-1 border truncate">{b.operator || "—"}</td>
+                        <td className="px-2 py-2 border">
+                          <span
+                            className={`px-2 py-1 rounded text-xs ${
+                              b.bookingType === "olimpya_base" ? "bg-blue-50 text-blue-700" : "bg-purple-50 text-purple-700"
+                            }`}
+                          >
+                            {b.bookingType === "olimpya_base" ? "Olimpya" : "Субагент"}
+                          </span>
+                        </td>
+                        <td className="px-2 py-2 border whitespace-nowrap">{fmtDate(b.createdAt)}</td>
+                        <td className="px-2 py-2 border whitespace-nowrap">{b.bookingNumber || "—"}</td>
+                        <td className="px-2 py-2 border truncate">{b.agentName || "—"}</td>
+                        <td className="px-2 py-2 border truncate">{b.operator || "—"}</td>
 
-                        <td className="px-2 py-1 border truncate">{b.hotel || "—"}</td>
-                        <td className="px-2 py-1 border whitespace-nowrap">{fmtDate(b.checkIn)}</td>
-                        <td className="px-2 py-1 border whitespace-nowrap">{fmtDate(b.checkOut)}</td>
-                        <td className="px-2 py-1 border">{payer}</td>
+                        <td className="px-2 py-2 border truncate">{b.hotel || "—"}</td>
+                        <td className="px-2 py-2 border whitespace-nowrap">{fmtDate(b.checkIn)}</td>
+                        <td className="px-2 py-2 border whitespace-nowrap">{fmtDate(b.checkOut)}</td>
+                        <td className="px-2 py-2 border">{payer}</td>
 
-                        {/* Брутто (получили) с подсветкой и фактом */}
-                        <td className={`px-2 py-1 border text-right ${bruttoCls}`}>
-                          {fmt2(b.brutto)}
+                        {/* Брутто (получили) */}
+                        <td className={`px-2 py-2 border text-right ${bruttoCls}`}>
+                          <div className="whitespace-nowrap">{fmt2(b.brutto)}</div>
                           <div className="text-[10px] text-gray-500">факт: {fmt2(b.inFact)}</div>
+                          {bar(inPct, "bg-emerald-500")}
                         </td>
 
                         {/* Нетто Крокус (оплата оператору) */}
-                        <td className={`px-2 py-1 border text-right ${netCls}`}>
-                          {fmt2(b.netCrocus)}
+                        <td className={`px-2 py-2 border text-right ${netCls}`}>
+                          <div className="whitespace-nowrap">{fmt2(b.netCrocus)}</div>
                           <div className="text-[10px] text-gray-500">факт: {fmt2(b.outFact)}</div>
+                          {bar(outPct, "bg-sky-500")}
                         </td>
 
-                        <td className="px-2 py-1 border text-right">{fmt2(b.netOlimp)}</td>
-                        <td className="px-2 py-1 border text-right">{fmt2(b.over)}</td>
-                        <td className="px-2 py-1 border text-right">{fmt2(b.crocusAmount)}</td>
+                        <td className="px-2 py-2 border text-right">{fmt2(b.netOlimp)}</td>
+                        <td className="px-2 py-2 border text-right">{fmt2(b.over)}</td>
+                        <td className="px-2 py-2 border text-right">{fmt2(b.crocusAmount)}</td>
 
-                        <td className="px-2 py-1 border text-right">{fmt2((b as any).Igor)}</td>
-                        <td className="px-2 py-1 border text-right">{fmt2((b as any).Evgeniy)}</td>
+                        <td className="px-2 py-2 border text-right">{fmt2((b as any).Igor)}</td>
+                        <td className="px-2 py-2 border text-right">{fmt2((b as any).Evgeniy)}</td>
 
-                        <td className="px-2 py-1 border">
+                        <td className="px-2 py-2 border">
                           <button
                             onClick={() => toggleBackoffice(b)}
-                            className={`h-7 px-2 rounded text-xs ${
-                              b.backofficeEntered ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700"
+                            className={`h-8 px-3 rounded text-xs ${
+                              backoffice ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-700"
                             }`}
                             title="Переключить Да/Нет"
                           >
-                            {b.backofficeEntered ? "Да" : "Нет"}
+                            {backoffice ? "Да" : "Нет"}
                           </button>
                         </td>
 
-                        <td className="px-2 py-1 border">
-                          <button
-                            className="text-lg hover:scale-110"
-                            title="Открыть редактирование"
-                            onClick={() => router.push(editHref(b))}
-                          >
-                            ✏️
-                          </button>
+                        <td className="px-2 py-2 border">
+  <Button
+  className="h-8 px-3 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 text-white hover:opacity-90 hover:shadow-md"
+  onClick={() => router.push(editHref(b))}
+>
+  <Edit3 className="h-4 w-4 mr-1.5" />
+  
+</Button>
                         </td>
                       </tr>
                     );
                   })}
                   {data.length === 0 && (
                     <tr>
-                      <td colSpan={18} className="border px-2 py-4 text-center text-gray-500">
+                      <td colSpan={18} className="border px-2 py-6 text-center text-gray-500">
                         Нет данных
                       </td>
                     </tr>
@@ -646,18 +802,18 @@ export default function BookingsFinanceReport() {
 
                 <tfoot className="bg-gray-100 font-semibold">
                   <tr>
-                    <td colSpan={9} className="px-2 py-2 text-right">
+                    <td colSpan={9} className="px-2 py-3 text-right">
                       Итого:
                     </td>
-                    <td className="px-2 py-2 text-right">{totals.brutto.toFixed(2)}</td>
-                    <td className="px-2 py-2 text-right">{totals.netCrocus.toFixed(2)}</td>
-                    <td className="px-2 py-2 text-right">{totals.netOlimp.toFixed(2)}</td>
-                    <td className="px-2 py-2 text-right">{totals.over.toFixed(2)}</td>
-                    <td className="px-2 py-2 text-right">{totals.crocusAmount.toFixed(2)}</td>
-                    <td className="px-2 py-2 text-right">{totals.Igor.toFixed(2)}</td>
-                    <td className="px-2 py-2 text-right">{totals.Evgeniy.toFixed(2)}</td>
-                    <td className="px-2 py-2" />
-                    <td className="px-2 py-2" />
+                    <td className="px-2 py-3 text-right">{totals.brutto.toFixed(2)}</td>
+                    <td className="px-2 py-3 text-right">{totals.netCrocus.toFixed(2)}</td>
+                    <td className="px-2 py-3 text-right">{totals.netOlimp.toFixed(2)}</td>
+                    <td className="px-2 py-3 text-right">{totals.over.toFixed(2)}</td>
+                    <td className="px-2 py-3 text-right">{totals.crocusAmount.toFixed(2)}</td>
+                    <td className="px-2 py-3 text-right">{totals.Igor.toFixed(2)}</td>
+                    <td className="px-2 py-3 text-right">{totals.Evgeniy.toFixed(2)}</td>
+                    <td className="px-2 py-3" />
+                    <td className="px-2 py-3" />
                   </tr>
                 </tfoot>
               </table>

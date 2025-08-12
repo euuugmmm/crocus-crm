@@ -282,7 +282,7 @@ export default function ManagerUsers() {
       <Head>
         <title>Пользователи — CrocusCRM</title>
       </Head>
-    <ManagerLayout>
+    <ManagerLayout fullWidthHeader fullWidthMain>
       <main className="max-w-7xl mx-auto p-4">
         {/* Шапка и инструменты */}
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
