@@ -1,4 +1,3 @@
-// pages/olimpya/new-booking.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -41,7 +40,7 @@ export default function NewBooking() {
       return;
     }
     if (!isOlimpya) {
-      router.replace("/olumpya/bookings");
+      router.replace("/olimpya/bookings"); // ← фикс опечатки
       return;
     }
     generateBookingNumber();
@@ -75,8 +74,6 @@ export default function NewBooking() {
     bruttoOperator: number;
     paymentMethod: string;
   }) {
-    // здесь можно скорректировать логику для olympya, 
-    // если нужно иное деление комиссий — оставил базовую
     const share = paymentMethod === "iban" ? 0.85 : 0.8;
     const bankFee = paymentMethod === "card" ? bruttoClient * 0.015 : 0;
     let commission = 0;
@@ -95,7 +92,7 @@ export default function NewBooking() {
     const { agent, bankFee } = calcCommission({
       operator: form.operator,
       bruttoClient: form.bruttoClient,
-      internalNet: form.nettoOperator,
+      internalNet: form.internalNet,        // ← фикс: было form.nettoOperator
       bruttoOperator: form.bruttoOperator,
       paymentMethod: form.paymentMethod,
     });
@@ -105,7 +102,7 @@ export default function NewBooking() {
       {
         bookingNumber,
         ...form,
-        bookingType: "olimpya_base",         // ← добавлено поле bookingType
+        bookingType: "olimpya_base",
         commission: agent,
         bankFee,
         agentId: user!.uid,
@@ -117,7 +114,6 @@ export default function NewBooking() {
       { merge: true }
     );
 
-    // уведомление в Telegram
     await fetch("/api/telegram/notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -135,7 +131,6 @@ export default function NewBooking() {
       }),
     }).catch(console.error);
 
-    // перенаправление на список бронирований olimpya
     router.push("/olimpya/bookings");
   }
 

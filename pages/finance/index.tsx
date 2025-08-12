@@ -58,6 +58,26 @@ export default function FinanceIndex() {
             </div>
           </Link>
 
+
+                    <Link href="/finance/rates">
+            <div className="p-6 rounded-xl bg-red-50 hover:bg-red-300 shadow cursor-pointer">
+              <h2 className="text-xl font-semibold mb-2">Rates</h2>
+              <p>Курсы</p>
+            </div>
+          </Link>
+                    <Link href="/finance/planned">
+            <div className="p-6 rounded-xl bg-red-50 hover:bg-red-300 shadow cursor-pointer">
+              <h2 className="text-xl font-semibold mb-2">Plan</h2>
+              <p>Плановые</p>
+            </div>
+          </Link>
+                    <Link href="/finance/setup">
+            <div className="p-6 rounded-xl bg-red-50 hover:bg-red-300 shadow cursor-pointer">
+              <h2 className="text-xl font-semibold mb-2">Setup</h2>
+              <p>Setup</p>
+            </div>
+          </Link>
+
         </div>
         <div className="text-gray-400 text-xs text-center">
           © {new Date().getFullYear()} Crocus Tour CRM — Финансовый модуль

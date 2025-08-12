@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "finance_categories",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "side", "order": "ASCENDING" },
+        { "fieldPath": "name", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "finance_counterparties",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "name", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

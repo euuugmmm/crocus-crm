@@ -1,3 +1,4 @@
+// pages/finance/cashflow-calendar.tsx
 "use client";
 
 import Head from "next/head";
@@ -12,10 +13,15 @@ import { db } from "@/firebaseConfig";
 import type { Account, Planned, Transaction } from "@/lib/finance/types";
 import { Button } from "@/components/ui/button";
 
-/** utils */
-const fmtISO = (d: Date) => d.toISOString().slice(0, 10);
+/** utils: локальные YYYY-MM-DD (без UTC-сдвигов) */
+const localISO = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
 const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
-const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
+const endOfMonth   = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
 const startOfCalendar = (d: Date) => {
   const first = startOfMonth(d);
   const dow = (first.getDay() + 6) % 7; // понедельник=0
@@ -28,7 +34,7 @@ const addDays = (d: Date, n: number) => {
   x.setDate(x.getDate() + n);
   return x;
 };
-const sameDay = (a: Date, b: Date) => fmtISO(a) === fmtISO(b);
+const sameDay = (a: Date, b: Date) => localISO(a) === localISO(b);
 
 export default function CashflowCalendarPage() {
   const router = useRouter();
@@ -42,7 +48,7 @@ export default function CashflowCalendarPage() {
   const monthStart = startOfMonth(anchor);
   const monthEnd   = endOfMonth(anchor);
   const calStart   = startOfCalendar(anchor);
-  const days = Array.from({ length: 42 }, (_, i) => addDays(calStart, i)); // 6 недель
+  const days = useMemo(() => Array.from({ length: 42 }, (_, i) => addDays(calStart, i)), [calStart]); // 6 недель
 
   /** фильтры */
   const [onlyAccount, setOnlyAccount] = useState<string>("all");
@@ -59,12 +65,14 @@ export default function CashflowCalendarPage() {
     if (!user) { router.replace("/login"); return; }
     if (!canView) { router.replace("/agent/bookings"); return; }
 
-    const ua = onSnapshot(query(collection(db, "finance_accounts")), snap =>
-      setAccounts(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))));
+    const ua = onSnapshot(
+      query(collection(db, "finance_accounts")),
+      snap => setAccounts(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })))
+    );
 
-    // грузим только диапазон месяца (+1 неделя по краям для вида)
-    const qFrom = fmtISO(addDays(calStart, 0));
-    const qTo   = fmtISO(addDays(calStart, 41));
+    // диапазон месяца (6 недель сетки)
+    const qFrom = localISO(addDays(calStart, 0));
+    const qTo   = localISO(addDays(calStart, 41));
 
     const up = onSnapshot(
       query(
@@ -87,9 +95,9 @@ export default function CashflowCalendarPage() {
     );
 
     return () => { ua(); up(); ut(); };
-  }, [user, canView, router, anchor]); // перезагружаем при смене месяца
+  }, [user, canView, router, calStart]);
 
-  /** индексы */
+  /** индексы (на будущее; сейчас в рендере ищем прямо в массиве) */
   const accById = useMemo(() => {
     const m = new Map<string, Account>();
     for (const a of accounts) if (a.id) m.set(a.id, a);
@@ -97,18 +105,18 @@ export default function CashflowCalendarPage() {
   }, [accounts]);
 
   /** агрегация по дням */
-  const todayISO = fmtISO(new Date());
-
   type DayAgg = {
     planIncome: number; planExpense: number;
     planIncomeOverdue: number; planExpenseOverdue: number;
     planIncomeMatched: number; planExpenseMatched: number;
     actualIncome: number; actualExpense: number;
-    planItems: Planned[]; txItems: Transaction[];
+    planItems: Planned[]; // и псевдо-элементы планов из transactions
+    txItems: Transaction[];
   };
 
   const perDay = useMemo(() => {
     const map = new Map<string, DayAgg>();
+    const todayISO = localISO(new Date());
 
     const fitAcc = (accId?: string | null) =>
       onlyAccount === "all" || (accId && accId === onlyAccount);
@@ -116,11 +124,14 @@ export default function CashflowCalendarPage() {
       onlySide === "all" || side === onlySide;
 
     if (showPlan) {
+      // 1) Старые планы (finance_planned)
       for (const p of planned) {
-        if (!fitAcc(p.accountId)) continue;
+        if (!fitAcc((p as any).accountId)) continue;
         if (!fitSide(p.side)) continue;
 
-        const key = p.date;
+        const key = p.date; // YYYY-MM-DD
+        if (!key) continue;
+
         if (!map.has(key)) map.set(key, {
           planIncome: 0, planExpense: 0,
           planIncomeOverdue: 0, planExpenseOverdue: 0,
@@ -129,10 +140,10 @@ export default function CashflowCalendarPage() {
           planItems: [], txItems: []
         });
         const agg = map.get(key)!;
-        const val = Number(p.eurAmount ?? p.amount ?? 0);
+        const val = Number((p as any).eurAmount ?? (p as any).amount ?? 0);
 
-        const isOverdue = (p.matchedTxId ? false : (p.date < todayISO));
-        const isMatched = !!p.matchedTxId;
+        const isOverdue = (p as any).matchedTxId ? false : (key < todayISO);
+        const isMatched = !!(p as any).matchedTxId;
 
         if (p.side === "income") {
           agg.planIncome += val;
@@ -145,21 +156,20 @@ export default function CashflowCalendarPage() {
         }
         agg.planItems.push(p);
       }
-    }
 
-    if (showActual) {
+      // 2) НОВЫЕ планы (finance_transactions, status="planned")
       for (const t of txs) {
-        if (!(t.status === "actual" || t.status === "reconciled")) continue;
+        if (t.status !== "planned") continue;
         if (t.type === "transfer") continue;
 
-        // счёт (для in/out берём accountId, для transfer мы уже пропустили)
+        const side: "income" | "expense" = t.type === "in" ? "income" : "expense";
+        if (!fitSide(side)) continue;
         if (!fitAcc((t as any).accountId)) continue;
 
-        const side: "income" | "expense" =
-          t.type === "in" ? "income" : "expense";
-        if (!fitSide(side)) continue;
+        // ключ дня: dueDate предпочтительнее, иначе date
+        const key = (t as any).dueDate || t.date;
+        if (!key) continue;
 
-        const key = t.date;
         if (!map.has(key)) map.set(key, {
           planIncome: 0, planExpense: 0,
           planIncomeOverdue: 0, planExpenseOverdue: 0,
@@ -168,7 +178,55 @@ export default function CashflowCalendarPage() {
           planItems: [], txItems: []
         });
         const agg = map.get(key)!;
-        const val = Number((t as any).baseAmount ?? t.amount?.value ?? 0);
+
+        const val = Number((t as any).baseAmount ?? (t as any).amount?.value ?? 0);
+        const isOverdue = key < todayISO;
+
+        if (side === "income") {
+          agg.planIncome += val;
+          if (isOverdue) agg.planIncomeOverdue += val;
+        } else {
+          agg.planExpense += val;
+          if (isOverdue) agg.planExpenseOverdue += val;
+        }
+
+        // Псевдо-элемент плана для модалки
+        agg.planItems.push({
+          id: t.id!,
+          date: key,
+          side,
+          amount: val,
+          eurAmount: val,
+          accountId: (t as any).accountId,
+          accountName: undefined,
+          matchedTxId: undefined,
+        } as any as Planned);
+      }
+    }
+
+    if (showActual) {
+      for (const t of txs) {
+        if (!(t.status === "actual" || t.status === "reconciled")) continue;
+        if (t.type === "transfer") continue;
+
+        if (!fitAcc((t as any).accountId)) continue;
+
+        const side: "income" | "expense" = t.type === "in" ? "income" : "expense";
+        if (!fitSide(side)) continue;
+
+        // для факта используем actualDate, если задан; иначе date
+        const key = (t as any).actualDate || t.date;
+        if (!key) continue;
+
+        if (!map.has(key)) map.set(key, {
+          planIncome: 0, planExpense: 0,
+          planIncomeOverdue: 0, planExpenseOverdue: 0,
+          planIncomeMatched: 0, planExpenseMatched: 0,
+          actualIncome: 0, actualExpense: 0,
+          planItems: [], txItems: []
+        });
+        const agg = map.get(key)!;
+        const val = Number((t as any).baseAmount ?? (t as any).amount?.value ?? 0);
 
         if (side === "income") agg.actualIncome += val;
         else agg.actualExpense += val;
@@ -188,7 +246,7 @@ export default function CashflowCalendarPage() {
   const monthTotals = useMemo(() => {
     let pi = 0, pe = 0, ai = 0, ae = 0, od = 0;
     for (const d of days) {
-      const k = fmtISO(d);
+      const k = localISO(d);
       const v = perDay.get(k);
       if (!v) continue;
       pi += v.planIncome; pe += v.planExpense;
@@ -197,10 +255,10 @@ export default function CashflowCalendarPage() {
     }
     return {
       planIn: +pi.toFixed(2), planOut: +pe.toFixed(2),
-      actIn: +ai.toFixed(2), actOut: +ae.toFixed(2),
+      actIn: +ai.toFixed(2),  actOut: +ae.toFixed(2),
       overdue: +od.toFixed(2),
       planNet: +(pi - pe).toFixed(2),
-      actNet: +(ai - ae).toFixed(2),
+      actNet:  +(ai - ae).toFixed(2),
     };
   }, [perDay, days]);
 
@@ -285,7 +343,7 @@ export default function CashflowCalendarPage() {
             <div key={d} className="bg-gray-50 text-center text-xs font-semibold py-2">{d}</div>
           ))}
           {days.map((d, idx) => {
-            const key = fmtISO(d);
+            const key = localISO(d);
             const v = perDay.get(key);
             const inMonth = d.getMonth() === anchor.getMonth();
             const isToday = sameDay(d, new Date());
@@ -380,7 +438,7 @@ export default function CashflowCalendarPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {picked.planItems.map(p=>(
+                      {picked.planItems.map((p:any)=>(
                         <tr key={p.id} className="text-center">
                           <td className="border px-2 py-1">{p.side==="income" ? "Поступление" : "Выплата"}</td>
                           <td className="border px-2 py-1 text-right">{Number(p.eurAmount ?? p.amount ?? 0).toFixed(2)}</td>
@@ -388,7 +446,7 @@ export default function CashflowCalendarPage() {
                           <td className="border px-2 py-1">
                             {p.matchedTxId
                               ? <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-600/20">Сопоставлено</span>
-                              : (p.date < todayISO
+                              : (p.date < localISO(new Date())
                                   ? <span className="px-2 py-0.5 rounded bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20">Просрочено</span>
                                   : <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20">Предстоит</span>)}
                           </td>
@@ -420,7 +478,7 @@ export default function CashflowCalendarPage() {
                         return (
                           <tr key={t.id} className="text-center">
                             <td className="border px-2 py-1">{side}</td>
-                            <td className="border px-2 py-1 text-right">{Number((t as any).baseAmount ?? t.amount?.value ?? 0).toFixed(2)}</td>
+                            <td className="border px-2 py-1 text-right">{Number((t as any).baseAmount ?? (t as any).amount?.value ?? 0).toFixed(2)}</td>
                             <td className="border px-2 py-1">{accounts.find(a=>a.id===accId)?.name || "—"}</td>
                             <td className="border px-2 py-1">{t.status}</td>
                           </tr>

@@ -1,8 +1,10 @@
-//components/BookingFormOlimpya.js
+"use client";
+
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import InputMask from "react-input-mask-next";
 import UploadScreenshots from "@/components/UploadScreenshots";
+import { useTranslation } from "next-i18next";
 
 const OPERATORS = [
   { label: "TOCO TOUR RO", val: "TOCO TOUR RO", allowNet: true },
@@ -38,6 +40,7 @@ export default function BookingFormOlimpya({
   agentAgency = "",
 }) {
   const router = useRouter();
+  const { t } = useTranslation("common");
 
   // поля формы
   const [base, setBase] = useState("igor");
@@ -76,9 +79,9 @@ export default function BookingFormOlimpya({
     const no = parseFloat(nettoOlimpya) || 0;
     const nf = parseFloat(internalNet) || 0;
 
-    const O = bc - no; // основная комиссия
-    const real = bc - nf; // реальная комиссия
-    const over = no - nf; // оверкомиссия
+    const O = bc - no;       // основная комиссия
+    const real = bc - nf;    // реальная комиссия
+    const over = no - nf;    // оверкомиссия
 
     let ig = 0, ev = 0;
     if (base === "igor") {
@@ -99,8 +102,6 @@ export default function BookingFormOlimpya({
     setCommissionIgor(rnd(ig));
     setCommissionEvgeniy(rnd(ev));
   }, [bruttoClient, nettoOlimpya, internalNet, base]);
-
-  const opInfo = OPERATORS.find(o => o.val === operator);
 
   const renderMaskedInput = (value, setter) => (
     <InputMask
@@ -222,103 +223,103 @@ export default function BookingFormOlimpya({
         {renderMaskedInput(checkOut, setCheckOut)}
       </div>
 
-{/* Туристы */}
-<h3 className="text-lg font-semibold">{t("tourists")}</h3>
-{tourists.map((tst, i) => (
-  <div key={i} className="relative border p-4 rounded mb-4">
-    {tourists.length > 1 && (
+      {/* Туристы */}
+      <h3 className="text-lg font-semibold">{t("tourists")}</h3>
+      {tourists.map((tst, i) => (
+        <div key={i} className="relative border p-4 rounded mb-4">
+          {tourists.length > 1 && (
+            <button
+              type="button"
+              onClick={() => removeTourist(i)}
+              className="absolute top-2 right-2 text-red-500"
+            >
+              🗑
+            </button>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* ФИО */}
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                {t("name")}
+              </label>
+              <input
+                type="text"
+                required
+                value={tst.name}
+                onChange={(e) => updateTourist(i, "name", e.target.value)}
+                className="w-full border rounded p-2"
+              />
+            </div>
+            {/* Дата рождения */}
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                {t("dob")}
+              </label>
+              {renderMaskedInput(
+                tst.dob,
+                (v) => updateTourist(i, "dob", v)
+              )}
+            </div>
+            {/* Паспорт № */}
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                {t("passportNumber")}
+              </label>
+              <input
+                type="text"
+                value={tst.passportNumber}
+                onChange={(e) =>
+                  updateTourist(i, "passportNumber", e.target.value)
+                }
+                className="w-full border rounded p-2"
+              />
+            </div>
+            {/* Действителен до */}
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                {t("passportValidUntil")}
+              </label>
+              {renderMaskedInput(
+                tst.passportValidUntil,
+                (v) => updateTourist(i, "passportValidUntil", v)
+              )}
+            </div>
+            {/* Гражданство */}
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                {t("nationality")}
+              </label>
+              <input
+                type="text"
+                value={tst.nationality}
+                onChange={(e) =>
+                  updateTourist(i, "nationality", e.target.value)
+                }
+                className="w-full border rounded p-2"
+              />
+            </div>
+            {/* EU-документ */}
+            <div className="flex items-center mt-2">
+              <input
+                type="checkbox"
+                checked={tst.hasEUDoc}
+                onChange={(e) =>
+                  updateTourist(i, "hasEUDoc", e.target.checked)
+                }
+                className="mr-2"
+              />
+              <label className="text-sm">{t("hasEUDoc")}</label>
+            </div>
+          </div>
+        </div>
+      ))}
       <button
         type="button"
-        onClick={() => removeTourist(i)}
-        className="absolute top-2 right-2 text-red-500"
+        onClick={addTourist}
+        className="text-blue-600 text-sm"
       >
-        🗑
+        + {t("addTourist")}
       </button>
-    )}
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {/* ФИО */}
-      <div>
-        <label className="block text-sm font-medium mb-1">
-          {t("tourists.fullName")}
-        </label>
-        <input
-          type="text"
-          required
-          value={tst.name}
-          onChange={(e) => updateTourist(i, "name", e.target.value)}
-          className="w-full border rounded p-2"
-        />
-      </div>
-      {/* Дата рождения */}
-      <div>
-        <label className="block text-sm font-medium mb-1">
-          {t("tourists.dob")}
-        </label>
-        {renderMaskedInput(
-          tst.dob,
-          (v) => updateTourist(i, "dob", v)
-        )}
-      </div>
-      {/* Паспорт № */}
-      <div>
-        <label className="block text-sm font-medium mb-1">
-          {t("tourists.passportNumber")}
-        </label>
-        <input
-          type="text"
-          value={tst.passportNumber}
-          onChange={(e) =>
-            updateTourist(i, "passportNumber", e.target.value)
-          }
-          className="w-full border rounded p-2"
-        />
-      </div>
-      {/* Действителен до */}
-      <div>
-        <label className="block text-sm font-medium mb-1">
-          {t("tourists.passportValidUntil")}
-        </label>
-        {renderMaskedInput(
-          tst.passportValidUntil,
-          (v) => updateTourist(i, "passportValidUntil", v)
-        )}
-      </div>
-      {/* Гражданство */}
-      <div>
-        <label className="block text-sm font-medium mb-1">
-          {t("tourists.nationality")}
-        </label>
-        <input
-          type="text"
-          value={tst.nationality}
-          onChange={(e) =>
-            updateTourist(i, "nationality", e.target.value)
-          }
-          className="w-full border rounded p-2"
-        />
-      </div>
-      {/* EU-документ */}
-      <div className="flex items-center mt-2">
-        <input
-          type="checkbox"
-          checked={tst.hasEUDoc}
-          onChange={(e) =>
-            updateTourist(i, "hasEUDoc", e.target.checked)
-          }
-          className="mr-2"
-        />
-        <label className="text-sm">{t("tourists.hasEUDoc")}</label>
-      </div>
-    </div>
-  </div>
-))}
-<button
-  type="button"
-  onClick={addTourist}
-  className="text-blue-600 text-sm"
->
-  + {t("tourists.add")}
-</button>
 
       {/* финансовые данные */}
       <h3 className="text-lg font-semibold mt-4">Финансовые данные</h3>
@@ -349,8 +350,6 @@ export default function BookingFormOlimpya({
           className="w-full border rounded p-2"
         />
       </div>
-     
-
 
       {/* расчёт комиссий */}
       <div className="p-3 bg-gray-50 border rounded text-sm space-y-1">

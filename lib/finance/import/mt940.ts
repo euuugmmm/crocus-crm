@@ -1,11 +1,12 @@
 // lib/finance/import/mt940.ts
+
 export type Mt940Tx = {
-  date: string;                // YYYY-MM-DD (value date)
-  sign: "C" | "D";             // C=credit (in), D=debit (out)
-  amount: number;              // в валюте счёта (у нас EUR)
-  code: string;                // тип операции из :61: (напр. NTRF, NCOL)
-  reference?: string;          // то, что после // в :61:, если было
-  description: string;         // полный :86: (склеенный)
+  date: string;           // YYYY-MM-DD (value date)
+  sign: "C" | "D";        // C = credit (in), D = debit (out)
+  amount: number;         // amount in account currency
+  code: string;           // 3–4 letter transaction code from :61: (e.g., NTRF, NCOL)
+  reference?: string;     // everything after last "//" in :61:, if present
+  description: string;    // full :86: text (multiline joined with spaces)
 };
 
 function toIsoDateFromYYMMDD(yymmdd: string): string {
@@ -16,9 +17,14 @@ function toIsoDateFromYYMMDD(yymmdd: string): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function parseAmount(s: string): number {
+  // Accept "123", "123,45", "123.45"
+  return parseFloat(s.replace(",", "."));
+}
+
 /**
- * Парсер MT940 (под стиль BTRL): вытягивает пары :61: + :86:
- * Возвращает список движений в EUR.
+ * MT940 parser tailored to common BTRL/BT formats.
+ * Extracts pairs of :61: (date, sign, amount, code, ref) and following :86: description.
  */
 export function parseMt940(text: string): Mt940Tx[] {
   const lines = text.replace(/\r/g, "").split("\n");
@@ -27,60 +33,92 @@ export function parseMt940(text: string): Mt940Tx[] {
   let pending: Partial<Mt940Tx> | null = null;
 
   const flush = () => {
-    if (pending && pending.date && typeof pending.amount === "number" && pending.description) {
+    if (
+      pending &&
+      pending.date &&
+      (pending.sign === "C" || pending.sign === "D") &&
+      typeof pending.amount === "number" &&
+      isFinite(pending.amount) &&
+      pending.description != null
+    ) {
       txs.push(pending as Mt940Tx);
     }
     pending = null;
   };
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+  const isTagLine = (s: string) => /^:\d{2}/.test(s) || s.startsWith("-}");
 
-    if (line.startsWith(":61:")) {
-      // новый tx начинается — предыдущий сохраняем
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].trim();
+    if (!raw) continue;
+
+    // :61:YYMMDD[entryDate?][C|D][amount][Ncode]... [//reference]
+    if (raw.startsWith(":61:")) {
       flush();
 
-      const body = line.slice(4);
-      // :61: YYMMDD[entryDate?] [C|D] amount[,decimals] code ...
-      // пример: 2508010801C3027,00NTRFNONREF//008ZEXA...
-      const m = body.match(/^(\d{6})(\d{4})?([CD])(\d+,\d{2})([A-Z]{4})/);
-      if (!m) continue;
+      const body = raw.slice(4);
 
-      const [, yymmdd, _entry, sign, amt, code] = m;
-      const date = toIsoDateFromYYMMDD(yymmdd);
-      const amount = parseFloat(amt.replace(",", "."));
+      // match: 6 digits date, optional 4 digits entry date, C/D sign,
+      // amount with optional decimals, 3-4 upper letters code
+      const m = body.match(
+        /^(\d{6})(\d{4})?([CD])(\d+(?:[.,]\d{0,4})?)(?:[A-Z]?)([A-Z]{3,4})/
+      );
+      if (!m) {
+        // Some banks may omit code; try a relaxed fallback
+        const fallback = body.match(/^(\d{6})(\d{4})?([CD])(\d+(?:[.,]\d{0,4})?)/);
+        if (!fallback) continue;
+        const [, yymmdd2, _entry2, sign2, amt2] = fallback;
+        pending = {
+          date: toIsoDateFromYYMMDD(yymmdd2),
+          sign: sign2 as "C" | "D",
+          amount: parseAmount(amt2),
+          code: "UNKN",
+          description: "",
+        };
+      } else {
+        const [, yymmdd, _entry, sign, amt, code] = m;
+        // reference: last //chunk (no spaces) if present
+        let reference: string | undefined;
+        const refMatch = body.match(/\/\/([^\s]+)\s*$/);
+        if (refMatch) reference = refMatch[1];
 
-      // референс берём как всё после последнего "//", если есть
-      let reference: string | undefined;
-      const refMatch = body.match(/\/\/([^\s]+)$/);
-      if (refMatch) reference = refMatch[1];
+        pending = {
+          date: toIsoDateFromYYMMDD(yymmdd),
+          sign: sign as "C" | "D",
+          amount: parseAmount(amt),
+          code,
+          reference,
+          description: "",
+        };
+      }
+      continue;
+    }
 
-      pending = {
-        date,
-        sign: sign as "C" | "D",
-        amount,
-        code,
-        reference,
-        description: "",
-      };
-    } else if (line.startsWith(":86:")) {
+    // :86: description may span multiple following lines until next tag
+    if (raw.startsWith(":86:")) {
       if (!pending) continue;
+      const parts: string[] = [raw.slice(4).trim()];
 
-      // :86: может быть на нескольких строках — собираем до следующего тега (начинается с ":") или "-}"
-      const parts: string[] = [line.slice(4).trim()];
+      // collect continuations
       let j = i + 1;
-      while (j < lines.length && !lines[j].startsWith(":") && !lines[j].startsWith("-}")) {
+      while (j < lines.length && !isTagLine(lines[j].trim())) {
         parts.push(lines[j].trim());
         j++;
       }
       i = j - 1;
-      // склеиваем описание в одну строку
-      pending.description = parts.join(" ");
+
+      // normalize excessive spaces
+      pending.description = parts.join(" ").replace(/\s+/g, " ").trim();
+      continue;
+    }
+
+    // If we meet another tag while a tx is pending, flush it
+    if (isTagLine(raw)) {
+      flush();
+      continue;
     }
   }
 
-  // добиваем последний
   flush();
-
   return txs;
 }
