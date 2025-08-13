@@ -1,4 +1,4 @@
-// pages/reports/bookings-finance.tsx
+// pages/finance/bookings-finance.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -7,9 +7,10 @@ import { useRouter } from "next/router";
 import {
   collection,
   onSnapshot,
-  query as fsQuery,
+  query,
   updateDoc,
   doc,
+  where,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
@@ -19,15 +20,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { DownloadTableExcel } from "react-export-table-to-excel";
 import { loadOwners, splitAmount } from "@/lib/finance/owners";
-import { useTranslation } from "next-i18next";
-import { serverSideTranslations } from "next-i18next/serverSideTranslations";
 import { Edit3 } from "lucide-react";
 
 // утилиты, как у менеджера
 import { fmtDate as fmtDateUtil, toDate } from "@/lib/utils/dates";
 import { fixed2, toNumber } from "@/lib/utils/numbers";
 
-// ───────── helpers ─────────
+/* ───────── helpers ───────── */
 const n = (v: any) => Number(v ?? 0) || 0;
 const fmt2 = (v: any) => n(v).toFixed(2);
 const fmtDate = (v: any) => fmtDateUtil(v);
@@ -37,7 +36,7 @@ const padISO = (d: Date) => {
 };
 const todayISO = () => padISO(new Date());
 
-// данные заявки
+/* данные заявки */
 type Booking = {
   id?: string;
   bookingType?: string; // "olimpya_base" | "subagent" ...
@@ -66,25 +65,17 @@ type Booking = {
   owners?: Array<{ ownerId?: string; name?: string; share?: number }>;
 
   backofficeEntered?: boolean;
-  backofficePosted?: boolean; // добавили для единого флага
+  backofficePosted?: boolean; // единый флаг (любое из двух = true)
 };
 
-// транзакции (лайт для сверки)
-type TxLite = {
+/* ордер (факт по заявке) */
+type OrderLite = {
   id: string;
-  bookingId?: string;
-  type?: "in" | "out" | "transfer";
-  status?: "planned" | "actual" | "reconciled";
-  baseAmount?: number; // в EUR
+  bookingId: string;
+  side: "income" | "expense";
+  baseAmount: number; // EUR
+  status: string;     // posted
 };
-
-export async function getServerSideProps({ locale }: { locale: string }) {
-  return {
-    props: {
-      ...(await serverSideTranslations(locale ?? "ru", ["common"])),
-    },
-  };
-}
 
 export default function BookingsFinanceReport() {
   const router = useRouter();
@@ -93,10 +84,10 @@ export default function BookingsFinanceReport() {
 
   const [rows, setRows] = useState<Booking[]>([]);
   const [owners, setOwners] = useState<{ id: string; name: string; share: number }[]>([]);
-  const [txs, setTxs] = useState<TxLite[]>([]);
+  const [orders, setOrders] = useState<OrderLite[]>([]);
   const tableRef = useRef<HTMLTableElement | null>(null);
 
-  // быстрые пресеты дат
+  /* быстрые пресеты дат */
   const [datePresets] = useState([
     {
       label: "Этот месяц",
@@ -142,7 +133,7 @@ export default function BookingsFinanceReport() {
     },
   ]);
 
-  // ФИЛЬТРЫ — возвращаем к предыдущей версии (вид + логика)
+  /* ФИЛЬТРЫ — как раньше по виду и логике */
   const [filters, setFilters] = useState({
     bookingType: "",
     dateFrom: "",
@@ -162,7 +153,7 @@ export default function BookingsFinanceReport() {
     backoffice: "all" as "all" | "yes" | "no",
   });
 
-  // сортировка — как у менеджера
+  /* сортировка — как у менеджера */
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
   function requestSort(key: string) {
     setSortConfig((prev) => {
@@ -177,47 +168,49 @@ export default function BookingsFinanceReport() {
       return;
     }
 
-    const unsubBookings = onSnapshot(fsQuery(collection(db, "bookings")), (snap) => {
+    const unsubBookings = onSnapshot(collection(db, "bookings"), (snap) => {
       setRows(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
     });
 
-    const unsubTx = onSnapshot(fsQuery(collection(db, "finance_transactions")), (snap) => {
-      const list = snap.docs.map((d) => {
-        const v: any = d.data();
-        return {
-          id: d.id,
-          bookingId: v.bookingId || undefined,
-          type: v.type,
-          status: v.status,
-          baseAmount: Number(v.baseAmount || 0),
-        } as TxLite;
-      });
-      setTxs(list);
-    });
+    // ФАКТ: только из ордеров
+    const unsubOrders = onSnapshot(
+      query(collection(db, "finance_orders"), where("status", "==", "posted")),
+      (snap) => {
+        const list = snap.docs.map((d) => {
+          const v: any = d.data();
+          return {
+            id: d.id,
+            bookingId: String(v.bookingId),
+            side: v.side as "income" | "expense",
+            baseAmount: Number(v.baseAmount || 0),
+            status: String(v.status || ""),
+          } as OrderLite;
+        });
+        setOrders(list);
+      }
+    );
 
     loadOwners().then(setOwners).catch(console.error);
 
     return () => {
       unsubBookings();
-      unsubTx();
+      unsubOrders();
     };
   }, [user, canView, router]);
 
-  // агрегат оплат по bookingId (факт: actual|reconciled)
+  /* агрегат оплат по bookingId (факт) — ТОЛЬКО по ордерам */
   const factByBooking = useMemo(() => {
     const map = new Map<string, { inEUR: number; outEUR: number }>();
-    for (const t of txs) {
-      if (!t.bookingId) continue;
-      if (t.status !== "actual" && t.status !== "reconciled") continue;
-      const prev = map.get(t.bookingId) || { inEUR: 0, outEUR: 0 };
-      if (t.type === "in") prev.inEUR += Number(t.baseAmount || 0);
-      else if (t.type === "out") prev.outEUR += Number(t.baseAmount || 0);
-      map.set(t.bookingId, prev);
+    for (const o of orders) {
+      const prev = map.get(o.bookingId) || { inEUR: 0, outEUR: 0 };
+      if (o.side === "income") prev.inEUR += Math.abs(o.baseAmount);
+      else if (o.side === "expense") prev.outEUR += Math.abs(o.baseAmount);
+      map.set(o.bookingId, prev);
     }
     return map;
-  }, [txs]);
+  }, [orders]);
 
-  // фильтрация — оригинальная логика из предыдущей версии
+  /* фильтрация — оригинальная логика */
   const filtered = useMemo(() => {
     const createdFrom = filters.dateFrom ? new Date(filters.dateFrom) : null;
     const createdTo = filters.dateTo ? new Date(filters.dateTo) : null;
@@ -301,6 +294,8 @@ export default function BookingsFinanceReport() {
         const str = (v: any) => String(v || "").toLowerCase();
 
         switch (key) {
+          case "type":
+            return str(a.bookingType).localeCompare(str(b.bookingType)) * dir;
           case "date":
             return ((toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0)) * dir;
           case "bookingNumber": {
@@ -341,7 +336,7 @@ export default function BookingsFinanceReport() {
       });
   }, [rows, filters, sortConfig]);
 
-  // расчёты + разбиение по учредителям + факты
+  /* расчёты + разбиение по учредителям + факты */
   const data = useMemo(() => {
     return filtered.map((b) => {
       const brutto = n(b.bruttoClient);
@@ -375,9 +370,6 @@ export default function BookingsFinanceReport() {
       const inFact = facts?.inEUR || 0;
       const outFact = facts?.outEUR || 0;
 
-      const inPct = brutto > 0 ? Math.max(0, Math.min(1, inFact / brutto)) : 0;
-      const outPct = netCrocus > 0 ? Math.max(0, Math.min(1, outFact / netCrocus)) : 0;
-
       return {
         ...b,
         brutto,
@@ -389,13 +381,11 @@ export default function BookingsFinanceReport() {
         Evgeniy: +Evgeniy.toFixed(2),
         inFact,
         outFact,
-        inPct,
-        outPct,
       };
     });
   }, [filtered, owners, factByBooking]);
 
-  // итоги
+  /* итоги */
   const totals = useMemo(() => {
     const sum = (arr: any[], key: string) => +arr.reduce((s, r) => s + n((r as any)[key]), 0).toFixed(2);
     return {
@@ -415,7 +405,7 @@ export default function BookingsFinanceReport() {
     };
   }, [data]);
 
-  // подсветка ячеек по факту оплаты
+  /* подсветка ячеек по факту оплаты (цвета оставляем) */
   const payClass = (paid: number, target: number) => {
     if (target <= 0) return "";
     if (paid <= 0.01) return "bg-rose-50 text-rose-800";
@@ -423,7 +413,7 @@ export default function BookingsFinanceReport() {
     return "bg-amber-50 text-amber-800";
   };
 
-  // бэкофис toggle — обновляем ОДНОВРЕМЕННО оба поля
+  /* бэкофис toggle — обновляем ОДНОВРЕМЕННО оба поля */
   const toggleBackoffice = async (row: Booking) => {
     if (!row.id) return;
     const current = !!(row.backofficePosted ?? row.backofficeEntered);
@@ -436,10 +426,10 @@ export default function BookingsFinanceReport() {
 
   const editHref = (b: Booking) => `/finance/booking/${b.id}`;
 
-  // экспорт — имя файла с периодом
+  /* экспорт — имя файла с периодом */
   const exportName = `bookings_finance_${filters.dateFrom || "all"}_${filters.dateTo || todayISO()}`;
 
-  // сброс фильтров
+  /* сброс фильтров */
   const resetFilters = () =>
     setFilters({
       bookingType: "",
@@ -521,7 +511,7 @@ export default function BookingsFinanceReport() {
                     <th className="px-2 py-1 border w-[120px] cursor-pointer" onClick={() => requestSort("type")}>
                       Тип
                     </th>
-                    <th className="px-2 py-1 border w=[100px] cursor-pointer" onClick={() => requestSort("date")}>
+                    <th className="px-2 py-1 border w-[100px] cursor-pointer" onClick={() => requestSort("date")}>
                       Дата
                     </th>
                     <th className="px-2 py-1 border w-[80px] cursor-pointer" onClick={() => requestSort("bookingNumber")}>
@@ -564,7 +554,7 @@ export default function BookingsFinanceReport() {
                     <th className="px-2 py-1 border w-[90px]">Действие</th>
                   </tr>
 
-                  {/* СТРОКА ФИЛЬТРОВ — ВИД КАК В ПРЕДЫДУЩЕЙ ВЕРСИИ */}
+                  {/* СТРОКА ФИЛЬТРОВ */}
                   <tr className="bg-white text-center text-xs">
                     <th className="px-1 py-0.5 border">
                       <Input
@@ -712,19 +702,6 @@ export default function BookingsFinanceReport() {
                     const netCls = payClass(b.outFact, b.netCrocus);
                     const backoffice = !!(b.backofficePosted ?? b.backofficeEntered);
 
-                    const inPct = Math.round((b.inPct || 0) * 100);
-                    const outPct = Math.round((b.outPct || 0) * 100);
-
-                    const bar = (pct: number, okColor: string) => (
-                      <div className="w-full h-2 bg-gray-200 rounded overflow-hidden mt-1">
-                        <div
-                          className={`h-full ${pct >= 100 ? okColor : "bg-amber-500"}`}
-                          style={{ width: `${Math.min(100, pct)}%` }}
-                          title={`${pct}%`}
-                        />
-                      </div>
-                    );
-
                     return (
                       <tr key={b.id} className="border-t hover:bg-gray-50 text-center">
                         <td className="px-2 py-2 border">
@@ -750,14 +727,12 @@ export default function BookingsFinanceReport() {
                         <td className={`px-2 py-2 border text-right ${bruttoCls}`}>
                           <div className="whitespace-nowrap">{fmt2(b.brutto)}</div>
                           <div className="text-[10px] text-gray-500">факт: {fmt2(b.inFact)}</div>
-                          {bar(inPct, "bg-emerald-500")}
                         </td>
 
                         {/* Нетто Крокус (оплата оператору) */}
                         <td className={`px-2 py-2 border text-right ${netCls}`}>
                           <div className="whitespace-nowrap">{fmt2(b.netCrocus)}</div>
                           <div className="text-[10px] text-gray-500">факт: {fmt2(b.outFact)}</div>
-                          {bar(outPct, "bg-sky-500")}
                         </td>
 
                         <td className="px-2 py-2 border text-right">{fmt2(b.netOlimp)}</td>
@@ -780,13 +755,12 @@ export default function BookingsFinanceReport() {
                         </td>
 
                         <td className="px-2 py-2 border">
-  <Button
-  className="h-8 px-3 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 text-white hover:opacity-90 hover:shadow-md"
-  onClick={() => router.push(editHref(b))}
->
-  <Edit3 className="h-4 w-4 mr-1.5" />
-  
-</Button>
+                          <Button
+                            className="h-8 px-3 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 text-white hover:opacity-90 hover:shadow-md"
+                            onClick={() => router.push(editHref(b))}
+                          >
+                            <Edit3 className="h-4 w-4 mr-1.5" />
+                          </Button>
                         </td>
                       </tr>
                     );
