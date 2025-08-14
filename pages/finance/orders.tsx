@@ -18,6 +18,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import TxModal from "@/components/finance/TxModal";
+import OrderModal from "@/components/finance/OrderModal";
 import { normalizeTx } from "@/lib/finance/tx";
 
 import {
@@ -75,7 +76,7 @@ type OrderDoc = {
   categoryId?: string | null;
   categoryName?: string | null;
   note?: string | null;
-  status: string; // posted
+  status: "planned" | "posted";
 };
 
 type MiniTx = {
@@ -140,6 +141,10 @@ export default function OrdersJournal() {
   // модалка транзакции
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [txInitial, setTxInitial] = useState<Partial<TxRow> | null>(null);
+
+  // модалка ордера
+  const [orderModalOpen, setOrderModalOpen] = useState(false);
+  const [orderInitial, setOrderInitial] = useState<OrderDoc | null>(null);
 
   useEffect(() => {
     if (!user) { router.replace("/login"); return; }
@@ -338,6 +343,12 @@ export default function OrdersJournal() {
       console.error(e);
       alert("Не удалось открыть транзакцию");
     }
+  };
+
+  // открыть OrderModal по конкретному ордеру
+  const openOrder = (o: OrderDoc) => {
+    setOrderInitial(o);
+    setOrderModalOpen(true);
   };
 
   // вычисление категории и контрагента для строки
@@ -568,6 +579,15 @@ export default function OrdersJournal() {
                     <td className="border px-2 py-1 text-left">{o.note || "—"}</td>
                     <td className="border px-2 py-1">
                       <div className="inline-flex gap-2">
+                        {/* редактировать ордер */}
+                        <button
+                          className="h-7 px-2 border rounded hover:bg-gray-100"
+                          onClick={() => openOrder(o)}
+                          title="Редактировать ордер"
+                        >
+                          🧾
+                        </button>
+                        {/* редактировать транзакцию (категорию, распределения и т.д.) */}
                         <button
                           className="h-7 px-2 border rounded hover:bg-gray-100"
                           onClick={() => openTx(o)}
@@ -602,7 +622,7 @@ export default function OrdersJournal() {
         </div>
       </div>
 
-      {/* Единая модалка транзакции — редактирование аллокаций/категории/заметки */}
+      {/* Модалка транзакции */}
       <TxModal
         open={txModalOpen}
         onClose={() => setTxModalOpen(false)}
@@ -612,6 +632,15 @@ export default function OrdersJournal() {
         categories={categories}
         counterparties={counterparties}
         fxList={fxList}
+        bookingOptionsMap={bookingOptionsMap}
+      />
+
+      {/* Модалка одного ордера */}
+      <OrderModal
+        open={orderModalOpen}
+        onClose={() => setOrderModalOpen(false)}
+        onSaved={() => setOrderModalOpen(false)}
+        initial={orderInitial || undefined}
         bookingOptionsMap={bookingOptionsMap}
       />
     </ManagerLayout>

@@ -30,7 +30,7 @@ import {
   BookingOption,
   Allocation,
 } from "@/types/finance";
-import { CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
+import { CheckCircle2, AlertTriangle, XCircle, Users2, User } from "lucide-react";
 
 /** ===== Helpers for bookings formatting ===== */
 type BookingFull = {
@@ -65,10 +65,10 @@ type BookingFull = {
   status?: string;
   agentName?: string;
 
-  clientPrice?: number;     // «классика»
-  bruttoClient?: number;    // Олимпия
+  clientPrice?: number;
+  bruttoClient?: number;
 
-  internalNet?: number;     // fact / net
+  internalNet?: number;
   internalNetto?: number;
   nettoOlimpya?: number;
   nettoOperator?: number;
@@ -132,7 +132,14 @@ export default function FinanceTransactions() {
   const [orders, setOrders] = useState<OrderDoc[]>([]);
 
   // UI: filters / modal / highlight
-  const [f, setF] = useState({ dateFrom: "", dateTo: "", accountId: "all", side: "all", search: "" });
+  const [f, setF] = useState({
+    dateFrom: "",
+    dateTo: "",
+    accountId: "all",
+    side: "all",
+    search: "",
+    alloc: "all" as "all" | "booked_full" | "booked_part" | "founders" | "none",
+  });
   const [modalOpen, setModalOpen] = useState(false);
   const [modalInitial, setModalInitial] = useState<Partial<TxRow> | null>(null);
 
@@ -220,6 +227,17 @@ export default function FinanceTransactions() {
     [rowsRaw, accounts, fxList]
   );
 
+  /** точные суммы по учредителям из raw (для бейджа и фильтра) */
+  const foundersByTx = useMemo(() => {
+    const m = new Map<string, { ig: number; ev: number }>();
+    for (const r of rowsRaw) {
+      const ig = Number(r.ownerIgorEUR || 0);
+      const ev = Number(r.ownerEvgeniyEUR || 0);
+      if (ig || ev) m.set(r.id, { ig, ev });
+    }
+    return m;
+  }, [rowsRaw]);
+
   /** агрегаты из ОРДЕРОВ → по txId */
   const ordersByTx = useMemo(() => {
     const m = new Map<string, { sum: number; count: number; items: Allocation[] }>();
@@ -245,7 +263,7 @@ export default function FinanceTransactions() {
     return m;
   }, [orders]);
 
-  /** витрина заявок для модалки: остатки на оплату/получение + «турист после отеля» */
+  /** витрина заявок для модалки */
   const bookingOptionsMap: Map<string, BookingOption> = useMemo(() => {
     const map = new Map<string, BookingOption>();
     for (const b of bookingsAll) {
@@ -290,6 +308,29 @@ export default function FinanceTransactions() {
     return map;
   }, [bookingsAll, sumsByBooking]);
 
+  /** классификация распределения (для фильтра) */
+  function classifyAlloc(t: TxRow): "booked_full" | "booked_part" | "founders" | "none" {
+    const agg = ordersByTx.get(t.id) || { sum: 0, count: 0 };
+    const bookedSum = Math.round(agg.sum * 100) / 100;
+    const total = Math.round(t.baseAmount * 100) / 100;
+
+    const hasOrders = (agg.count || 0) > 0;
+    const fullByBookings = hasOrders && bookedSum + 0.01 >= total;
+    const partByBookings = hasOrders && bookedSum > 0.01 && !fullByBookings;
+
+    if (fullByBookings) return "booked_full";
+    if (partByBookings) return "booked_part";
+
+    // учредители (legacy ownerWho или точные суммы)
+    const fz = foundersByTx.get(t.id);
+    const hasFoundersExact = !!fz && (fz.ig > 0 || fz.ev > 0);
+    const hasFoundersLegacy = t.side === "expense" && !!(t as any).ownerWho;
+
+    if (hasFoundersExact || hasFoundersLegacy) return "founders";
+
+    return "none";
+  }
+
   /** фильтры + отображаемый список */
   const displayed = useMemo(() => {
     const df = f.dateFrom ? new Date(f.dateFrom) : null;
@@ -311,10 +352,17 @@ export default function FinanceTransactions() {
           ].join(" ").toLowerCase();
           if (!s.includes(q)) return false;
         }
+
+        // фильтр по распределению
+        if (f.alloc !== "all") {
+          const cls = classifyAlloc(t);
+          if (cls !== f.alloc) return false;
+        }
+
         return true;
       })
       .sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [txs, f]);
+  }, [txs, f, ordersByTx, foundersByTx]);
 
   /** итоги */
   const totals = useMemo(() => {
@@ -353,51 +401,107 @@ export default function FinanceTransactions() {
     await removeTxWithOrders(row.id);
   };
 
-  /** ── бейдж распределения (иконки + цвета) ── */
+  /** ── бейдж распределения ── */
   function AllocationBadge({
     txId,
     totalEUR,
+    ownerWho,
+    side,
+    ownerIgorEUR = 0,
+    ownerEvgeniyEUR = 0,
   }: {
     txId: string;
     totalEUR: number;
+    ownerWho?: string | null;
+    side: CategorySide;
+    ownerIgorEUR?: number;
+    ownerEvgeniyEUR?: number;
   }) {
+    const r2 = (x: number) => Math.round(x * 100) / 100;
     const agg = ordersByTx.get(txId) || { sum: 0, count: 0, items: [] as Allocation[] };
-    const isFull = agg.sum + 0.01 >= totalEUR;
-    const isNone = agg.sum <= 0.01;
+    const bookedSum = r2(agg.sum);
+    const hasOrders = agg.count > 0;
+    const fullyByBookings = bookedSum + 0.01 >= totalEUR;
+    const noneByBookings = bookedSum <= 0.01;
 
-    const tip = agg.items.map(a => `${a.bookingId} · ${a.amountBase.toFixed(2)} €`).join("\n");
+    const foundersLeft = r2(Math.max(0, totalEUR - bookedSum));
+    const foundersSum  = r2((Number(ownerIgorEUR) || 0) + (Number(ownerEvgeniyEUR) || 0));
+    const foundersMatch = Math.abs(foundersSum - foundersLeft) <= 0.01;
 
-    if (isNone) {
-      return (
-        <span
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20"
-          title="Нет распределения по заявкам"
-        >
-          <XCircle className="h-4 w-4" />
-          <span className="hidden sm:inline">Нет</span>
-        </span>
-      );
+    const tipOrders = agg.items.map(a => `${a.bookingId} · ${a.amountBase.toFixed(2)} €`).join("\n");
+    const tipFounders =
+      foundersSum > 0 ? `Игорь: ${r2(Number(ownerIgorEUR)).toFixed(2)} €\nЕвгений: ${r2(Number(ownerEvgeniyEUR)).toFixed(2)} €` : "";
+
+    if (hasOrders) {
+      if (fullyByBookings) {
+        return (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
+            title={tipOrders || "Распределено по заявкам полностью"}
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            <span className="hidden sm:inline">Полностью</span>
+          </span>
+        );
+      }
+      if (!noneByBookings) {
+        return (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20"
+            title={`${bookedSum.toFixed(2)} / ${totalEUR.toFixed(2)} € (${agg.count})\n${tipOrders}`}
+          >
+            <AlertTriangle className="h-4 w-4" />
+            <span className="hidden sm:inline">Частично</span>
+          </span>
+        );
+      }
     }
 
-    if (isFull) {
+    // 1) legacy ownerWho (100/0 или 50/50)
+    if (side === "expense" && ownerWho) {
       return (
         <span
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
-          title={tip || "Распределено полностью"}
+          title="Распределено по учредителям"
         >
-          <CheckCircle2 className="h-4 w-4" />
-          <span className="hidden sm:inline">Полностью</span>
+          {ownerWho === "split50" || ownerWho === "crocus" ? <Users2 className="h-4 w-4" /> : <User className="h-4 w-4" />}
+          <span className="hidden sm:inline">Учредители</span>
         </span>
       );
     }
 
+    // 2) новый способ — точные суммы в полях ownerIgorEUR/ownerEvgeniyEUR
+    if (side === "expense" && (ownerIgorEUR > 0 || ownerEvgeniyEUR > 0)) {
+      if (foundersMatch) {
+        return (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
+            title={tipFounders}
+          >
+            <Users2 className="h-4 w-4" />
+            <span className="hidden sm:inline">Учредители</span>
+          </span>
+        );
+      }
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20"
+          title={`Учредители частично\n${tipFounders}\nОстаток: ${(foundersLeft - foundersSum).toFixed(2)} €`}
+        >
+          <AlertTriangle className="h-4 w-4" />
+          <span className="hidden sm:inline">Частично</span>
+        </span>
+      );
+    }
+
+    // совсем нет распределения
     return (
       <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20"
-        title={`${agg.sum.toFixed(2)} / ${totalEUR.toFixed(2)} € (${agg.count})\n${tip}`}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20"
+        title="Нет распределения"
       >
-        <AlertTriangle className="h-4 w-4" />
-        <span className="hidden sm:inline">Частично</span>
+        <XCircle className="h-4 w-4" />
+        <span className="hidden sm:inline">Нет</span>
       </span>
     );
   }
@@ -429,7 +533,7 @@ export default function FinanceTransactions() {
         </div>
 
         {/* Фильтры */}
-        <div className="p-3 border rounded-lg grid grid-cols-1 sm:grid-cols-6 gap-2 text-sm">
+        <div className="p-3 border rounded-lg grid grid-cols-1 sm:grid-cols-7 gap-2 text-sm">
           <div>
             <div className="text-xs text-gray-600 mb-1">С даты</div>
             <input type="date" className="w-full border rounded px-2 py-1"
@@ -459,6 +563,23 @@ export default function FinanceTransactions() {
               <option value="expense">Расход</option>
             </select>
           </div>
+
+          {/* Новый фильтр: Распределение */}
+          <div>
+            <div className="text-xs text-gray-600 mb-1">Распределение</div>
+            <select
+              className="w-full border rounded px-2 py-1"
+              value={f.alloc}
+              onChange={(e) => setF((s) => ({ ...s, alloc: e.target.value as any }))}
+            >
+              <option value="all">Все</option>
+              <option value="booked_full">По заявкам — полностью</option>
+              <option value="booked_part">По заявкам — частично</option>
+              <option value="founders">Учредители</option>
+              <option value="none">Нет</option>
+            </select>
+          </div>
+
           <div className="sm:col-span-2">
             <div className="text-xs text-gray-600 mb-1">Поиск</div>
             <input className="w-full border rounded px-2 py-1"
@@ -489,6 +610,10 @@ export default function FinanceTransactions() {
               {displayed.map((t) => {
                 const highlight = t.id === highlightId;
 
+                const founders = foundersByTx.get(t.id);
+                const ownerIgorEUR = founders?.ig || 0;
+                const ownerEvgeniyEUR = founders?.ev || 0;
+
                 return (
                   <tr
                     key={t.id}
@@ -518,7 +643,14 @@ export default function FinanceTransactions() {
                     <td className="border px-2 py-1">{t.categoryName || "—"}</td>
                     <td className="border px-2 py-1">{t.counterpartyName || "—"}</td>
                     <td className="border px-2 py-1 whitespace-nowrap">
-                      <AllocationBadge txId={t.id} totalEUR={t.baseAmount} />
+                      <AllocationBadge
+                        txId={t.id}
+                        totalEUR={t.baseAmount}
+                        ownerWho={(t as any).ownerWho}
+                        side={t.side as CategorySide}
+                        ownerIgorEUR={ownerIgorEUR}
+                        ownerEvgeniyEUR={ownerEvgeniyEUR}
+                      />
                     </td>
                     <td className="border px-2 py-1 text-left align-top"
                         style={{ maxWidth: 440, overflow: "hidden", display: "-webkit-box",

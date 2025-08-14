@@ -14,8 +14,9 @@ import { Timestamp, collection, query, where, getDocs, writeBatch, doc } from "f
 import { db } from "@/firebaseConfig";
 import { eurFrom, todayISO } from "./fx";
 
-/** Безопасное число */
+/** безопасное число */
 const toNum = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const r2 = (x: number) => Math.round((Number(x) || 0) * 100) / 100;
 
 /** Нормализация Firestore-документа транзакции под UI */
 export function normalizeTx(raw: any, accounts: Account[], fxList: FxDoc[]): TxRow {
@@ -29,21 +30,24 @@ export function normalizeTx(raw: any, accounts: Account[], fxList: FxDoc[]): TxR
     (accounts.find((a) => a.id === raw.accountId)?.currency as Currency) ||
     "EUR";
 
-  const rawAmt = typeof raw.amount === "number"
-    ? Number(raw.amount || 0)
-    : Number(raw.amount?.value || 0);
+  const rawAmt =
+    typeof raw.amount === "number"
+      ? Number(raw.amount || 0)
+      : Number(raw.amount?.value || 0);
+
+  const dateStr: string = raw.date || todayISO();
 
   const rawBase = Number(
-    raw.baseAmount ?? raw.eurAmount ?? eurFrom(rawAmt, currency, raw.date || todayISO(), fxList)
+    raw.baseAmount ?? raw.eurAmount ?? eurFrom(rawAmt, currency, dateStr, fxList)
   );
 
   const amount = Math.abs(rawAmt);
   const baseAmount = Math.abs(rawBase);
 
-  return {
-    id: raw.id,
-    date: raw.date || todayISO(),
-    status: raw.status,
+  const row: TxRow = {
+    id: String(raw.id),
+    date: dateStr,
+    status: raw.status || "actual",
     accountId: raw.accountId,
     accountName: raw.accountName,
     currency,
@@ -67,6 +71,13 @@ export function normalizeTx(raw: any, accounts: Account[], fxList: FxDoc[]): TxR
     source: raw.source,
     createdAt: raw.createdAt,
   };
+
+  // --- ВАЖНО: прокидываем точные суммы распределения по учредителям ---
+  (row as any).ownerIgorEUR     = Number(raw.ownerIgorEUR || 0);
+  (row as any).ownerEvgeniyEUR  = Number(raw.ownerEvgeniyEUR || 0);
+  (row as any).foundersTotalEUR = Number(raw.foundersTotalEUR || 0);
+
+  return row;
 }
 
 /** Payload для Firestore (канонический формат, положительные суммы) */
@@ -95,6 +106,11 @@ export function buildTxPayload(
 
   const side = (data.side || "income") as CategorySide;
 
+  // точные суммы по учредителям (если side=expense и пришли из формы)
+  const igorEUR = side === "expense" ? r2((data as any)?.ownerIgorEUR ?? 0) : 0;
+  const evgEUR  = side === "expense" ? r2((data as any)?.ownerEvgeniyEUR ?? 0) : 0;
+  const foundersTotalEUR = side === "expense" ? r2(igorEUR + evgEUR) : 0;
+
   const payload: any = {
     date: data.date || todayISO(),
     status: data.status || "actual",
@@ -116,7 +132,17 @@ export function buildTxPayload(
     counterpartyId: data.counterpartyId ?? null,
     counterpartyName: cp?.name || null,
 
+    // «лайт-метка» владения (legacy): сохраняем только для расходов
     ownerWho: side === "expense" ? ((data.ownerWho ?? null) as OwnerWho) : null,
+
+    // точные суммы по учредителям (кастомный сплит)
+    ...(side === "expense"
+      ? {
+          ownerIgorEUR: igorEUR || 0,
+          ownerEvgeniyEUR: evgEUR || 0,
+          foundersTotalEUR: foundersTotalEUR || 0,
+        }
+      : {}),
 
     bookingId: (data.bookingId ?? null) || null, // одиночная ссылка для совместимости
     note: (data.note || "").trim(),

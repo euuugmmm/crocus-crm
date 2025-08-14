@@ -188,5 +188,43 @@ export type BookingOption = {
   operatorOverpay?: number;   // (на будущее) переплата оператору = max(0, expSum - netPlan)
 };
 
+export type PayoutKind = "agent" | "founders";
 
+export type FoundersItem = {
+  owner: "igor" | "evgeniy";
+  amountGross: number;
+  amountNet: number;
+  taxPct: number;
+  taxPlannedAmount: number;
+  taxPlannedDate: string; // YYYY-MM-DD
+  txNetId?: string;
+  txTaxPlanId?: string;
+};
+
+export type Payout = {
+  id: string;
+  kind: PayoutKind;
+  agentId?: string;           // only for kind='agent'
+  createdAt?: any;
+  amount: number;             // факт к перечислению (для founders = sum(amountNet))
+  totalGross?: number;        // для founders/agent
+  totalNet?: number;          // для founders/agent
+  transferFee?: number;
+  comment?: string;
+  annexLink?: string;
+
+  // agent mode
+  items?: PayoutItem[];
+
+  // founders mode
+  foundersItems?: FoundersItem[];
+};
+
+/** ===== PayoutItem definition (added to fix error) ===== */
+export type PayoutItem = {
+  id: string;
+  amount: number;
+  description?: string;
+  // Add other fields as needed
+};
   

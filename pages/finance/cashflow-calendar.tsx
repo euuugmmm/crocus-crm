@@ -36,6 +36,9 @@ const addDays = (d: Date, n: number) => {
 };
 const sameDay = (a: Date, b: Date) => localISO(a) === localISO(b);
 
+// безопасное модульное число
+const absNum = (v: any) => Math.abs(Number(v) || 0);
+
 export default function CashflowCalendarPage() {
   const router = useRouter();
   const { user, isManager, isSuperManager, isAdmin } = useAuth();
@@ -97,7 +100,7 @@ export default function CashflowCalendarPage() {
     return () => { ua(); up(); ut(); };
   }, [user, canView, router, calStart]);
 
-  /** индексы (на будущее; сейчас в рендере ищем прямо в массиве) */
+  /** индексы */
   const accById = useMemo(() => {
     const m = new Map<string, Account>();
     for (const a of accounts) if (a.id) m.set(a.id, a);
@@ -140,7 +143,9 @@ export default function CashflowCalendarPage() {
           planItems: [], txItems: []
         });
         const agg = map.get(key)!;
-        const val = Number((p as any).eurAmount ?? (p as any).amount ?? 0);
+
+        // ВАЖНО: нормализуем знак, берём модуль
+        const val = absNum((p as any).eurAmount ?? (p as any).amount ?? 0);
 
         const isOverdue = (p as any).matchedTxId ? false : (key < todayISO);
         const isMatched = !!(p as any).matchedTxId;
@@ -179,7 +184,8 @@ export default function CashflowCalendarPage() {
         });
         const agg = map.get(key)!;
 
-        const val = Number((t as any).baseAmount ?? (t as any).amount?.value ?? 0);
+        // ВАЖНО: модуль суммы
+        const val = absNum((t as any).baseAmount ?? (t as any).amount?.value ?? 0);
         const isOverdue = key < todayISO;
 
         if (side === "income") {
@@ -226,7 +232,9 @@ export default function CashflowCalendarPage() {
           planItems: [], txItems: []
         });
         const agg = map.get(key)!;
-        const val = Number((t as any).baseAmount ?? (t as any).amount?.value ?? 0);
+
+        // ВАЖНО: модуль суммы
+        const val = absNum((t as any).baseAmount ?? (t as any).amount?.value ?? 0);
 
         if (side === "income") agg.actualIncome += val;
         else agg.actualExpense += val;
@@ -441,7 +449,9 @@ export default function CashflowCalendarPage() {
                       {picked.planItems.map((p:any)=>(
                         <tr key={p.id} className="text-center">
                           <td className="border px-2 py-1">{p.side==="income" ? "Поступление" : "Выплата"}</td>
-                          <td className="border px-2 py-1 text-right">{Number(p.eurAmount ?? p.amount ?? 0).toFixed(2)}</td>
+                          <td className="border px-2 py-1 text-right">
+                            {absNum(p.eurAmount ?? p.amount ?? 0).toFixed(2)}
+                          </td>
                           <td className="border px-2 py-1">{p.accountName || accounts.find(a=>a.id===p.accountId)?.name || "—"}</td>
                           <td className="border px-2 py-1">
                             {p.matchedTxId
@@ -475,10 +485,11 @@ export default function CashflowCalendarPage() {
                       {picked.txItems.map(t=>{
                         const side = t.type==="in" ? "Поступление" : t.type==="out" ? "Выплата" : "—";
                         const accId = (t as any).accountId as string | undefined;
+                        const val = absNum((t as any).baseAmount ?? (t as any).amount?.value ?? 0);
                         return (
                           <tr key={t.id} className="text-center">
                             <td className="border px-2 py-1">{side}</td>
-                            <td className="border px-2 py-1 text-right">{Number((t as any).baseAmount ?? (t as any).amount?.value ?? 0).toFixed(2)}</td>
+                            <td className="border px-2 py-1 text-right">{val.toFixed(2)}</td>
                             <td className="border px-2 py-1">{accounts.find(a=>a.id===accId)?.name || "—"}</td>
                             <td className="border px-2 py-1">{t.status}</td>
                           </tr>

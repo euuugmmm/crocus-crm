@@ -5,21 +5,21 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
 import { useAuth } from "@/context/AuthContext";
-import {
-  collection, onSnapshot, orderBy, query
-} from "firebase/firestore";
+import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type { Category, Currency, FxRates, Transaction } from "@/lib/finance/types";
 import { Button } from "@/components/ui/button";
 
-// helper: взять курс на дату (или ближайший предыдущий)
+/* ========================= Helpers ========================= */
+
+// взять курс на дату (или ближайший предыдущий)
 function pickFxForDate(list: FxRates[], d: string): FxRates | null {
   if (!list.length) return null;
   const exact = list.find(x => x.id === d);
   if (exact) return exact;
-  // берем ближайший <= d
-  const older = [...list].filter(x => x.id <= d).sort((a,b)=> a.id < b.id ? 1 : -1)[0];
-  return older || [...list].sort((a,b)=> a.id < b.id ? 1 : -1)[0] || null;
+  // ближайший <= d (id в формате YYYY-MM-DD)
+  const older = [...list].filter(x => x.id <= d).sort((a,b)=> (a.id < b.id ? 1 : -1))[0];
+  return older || [...list].sort((a,b)=> (a.id < b.id ? 1 : -1))[0] || null;
 }
 
 // конвертация через EUR как базу
@@ -40,7 +40,43 @@ function convert(amount: number, from: Currency, to: Currency, fx: FxRates | nul
   return eur * rTo;
 }
 
-function ymKey(iso: string) { return iso?.slice(0,7) || ""; } // YYYY-MM
+// ключ YYYY-MM для группировки по месяцам
+function ymKey(iso: string) { return iso?.slice(0,7) || ""; }
+
+// безусловный модуль числа
+const abs = (v: any) => Math.abs(Number(v) || 0);
+
+// классификация категории в PL
+type PLClass = "rev" | "cogs" | "opex" | "skip";
+function classifyCategory(cat?: Partial<Category> | null, fallbackByType?: "in" | "out"): PLClass {
+  if (!cat) {
+    // если нет категории — по типу транзакции:
+    if (fallbackByType === "in") return "rev";
+    if (fallbackByType === "out") return "opex";
+    return "skip";
+  }
+
+  const side = (cat as any).side as "income" | "expense" | undefined;
+  if (side === "income") return "rev";
+  if (side !== "expense") return "skip";
+
+  // явные признаки COGS на уровне схемы (любое подойдёт)
+  const c: any = cat;
+  if (c.isCogs === true || c.plGroup === "cogs" || c.kind === "cogs" || c.type === "cogs") return "cogs";
+
+  // эвристика по названию (на случай отсутствия явного флага)
+  const name = String((cat as any).name || "").toLowerCase();
+  const cogsHints = [
+    "себестоимость","нетто","netto","net","internal","интернал",
+    "operator","оператор","supplier","поставщ","перевозчик",
+    "avia","авиа","отель","hotel","туроператор","оператору"
+  ];
+  if (cogsHints.some(h => name.includes(h))) return "cogs";
+
+  return "opex";
+}
+
+/* ========================= Page ========================= */
 
 export default function PLPage() {
   const router = useRouter();
@@ -55,20 +91,25 @@ export default function PLPage() {
   const today = new Date().toISOString().slice(0,10);
   const monthStart = new Date(); monthStart.setDate(1);
   const [dateFrom, setDateFrom] = useState<string>(monthStart.toISOString().slice(0,10));
-  const [dateTo, setDateTo] = useState<string>(today);
-  const [groupBy, setGroupBy] = useState<"month"|"total">("month");
+  const [dateTo, setDateTo]     = useState<string>(today);
+  const [groupBy, setGroupBy]   = useState<"month"|"total">("month");
 
   useEffect(() => {
     if (!user) { router.replace("/login"); return; }
     if (!canView) { router.replace("/agent/bookings"); return; }
 
-    const ut = onSnapshot(query(collection(db,"finance_transactions"), orderBy("date","asc")),
-      snap => setTx(snap.docs.map(d=>({ id:d.id, ...(d.data() as any) }))));
-    const uc = onSnapshot(query(collection(db,"finance_categories")),
-      snap => setCat(snap.docs.map(d=>({ id:d.id, ...(d.data() as any) }))));
-    const ur = onSnapshot(query(collection(db,"finance_fxRates")),
-      snap => setFxList(snap.docs.map(d=>({ id:d.id, ...(d.data() as any) })) as FxRates[]));
-
+    const ut = onSnapshot(
+      query(collection(db,"finance_transactions"), orderBy("date","asc")),
+      snap => setTx(snap.docs.map(d=>({ id:d.id, ...(d.data() as any) })))
+    );
+    const uc = onSnapshot(
+      query(collection(db,"finance_categories")),
+      snap => setCat(snap.docs.map(d=>({ id:d.id, ...(d.data() as any) })))
+    );
+    const ur = onSnapshot(
+      query(collection(db,"finance_fxRates")),
+      snap => setFxList(snap.docs.map(d=>({ id:d.id, ...(d.data() as any) })) as FxRates[])
+    );
     return () => { ut(); uc(); ur(); };
   }, [user, canView, router]);
 
@@ -78,66 +119,75 @@ export default function PLPage() {
     return m;
   }, [cat]);
 
-  // P&L расчёт: фактические/сверенные, не учитываем transfers
+  // P&L расчёт: учитываем только actual/reconciled, исключаем transfers
   const rows = useMemo(() => {
     const from = dateFrom ? new Date(dateFrom) : null;
     const to   = dateTo   ? new Date(dateTo)   : null;
 
-    // агрегатор: key -> {rev,cogs,opex}
-    const map = new Map<string, { rev: number; cogs: number; opex: number }>();
+    type Agg = { rev: number; cogs: number; opex: number };
+    const map = new Map<string, Agg>();
 
     for (const t of tx) {
+      // статусы
       if (!(t.status === "actual" || t.status === "reconciled")) continue;
+      // исключаем переводы
       if (t.type === "transfer") continue;
 
-      const d = new Date(t.date);
+      // дата для P&L: actualDate предпочтительнее
+      const dateStr = (t as any).actualDate || t.date;
+      if (!dateStr) continue;
+      const d = new Date(dateStr);
       if (from && d < from) continue;
       if (to && d > to) continue;
 
-      // EUR сумма: берем baseAmount, если есть; иначе конвертируем
-      let eur = Number(t.baseAmount || 0);
+      // EUR: приоритет baseAmount; иначе конвертация; иначе если валюта EUR — берём amount.value
+      let eur = abs((t as any).baseAmount);
       if (!eur) {
-        const rateDoc = pickFxForDate(fxList, t.date);
         const val = Number(t.amount?.value || 0);
-        eur = convert(val, (t.amount?.currency || "EUR") as Currency, "EUR", rateDoc);
+        const ccy = (t.amount?.currency || "EUR") as Currency;
+        if (ccy === "EUR") eur = abs(val);
+        else {
+          const rateDoc = pickFxForDate(fxList, dateStr);
+          eur = abs(convert(val, ccy, "EUR", rateDoc));
+        }
       }
+      // если всё ещё 0 — пропускаем (неизвестный курс/сумма)
+      if (!eur) continue;
 
-      const side = catById.get(t.categoryId || "")?.side;
-      const k = groupBy === "month" ? ymKey(t.date) : "TOTAL";
+      // классификация
+      const catDoc = t.categoryId ? catById.get(t.categoryId) : undefined;
+      const byType: "in" | "out" | undefined = t.type === "in" ? "in" : t.type === "out" ? "out" : undefined;
+      const cls = classifyCategory(catDoc, byType);
+
+      // ключ агрегации
+      const k = groupBy === "month" ? ymKey(dateStr) : "TOTAL";
       if (!map.has(k)) map.set(k, { rev: 0, cogs: 0, opex: 0 });
-
       const cur = map.get(k)!;
-      if (side === "income") {
-        // выручка всегда плюс
-        cur.rev += eur;
-      } else if (side === "cogs") {
-        // себестоимость как минус
-        cur.cogs += eur;
-      } else if (side === "expense") {
-        cur.opex += eur;
-      }
+
+      if (cls === "rev") cur.rev  += eur;
+      else if (cls === "cogs") cur.cogs += eur;
+      else if (cls === "opex") cur.opex += eur;
+      // "skip" — игнорируем
     }
 
-    // превращаем в массив строк
+    // превращаем в строки
     const arr = Array.from(map.entries()).map(([k, v]) => {
       const gross = v.rev - v.cogs;
       const net   = gross - v.opex;
       return {
         key: k,
         revenue: +v.rev.toFixed(2),
-        cogs: +v.cogs.toFixed(2),
-        gross: +gross.toFixed(2),
-        opex: +v.opex.toFixed(2),
-        net: +net.toFixed(2),
+        cogs:    +v.cogs.toFixed(2),
+        gross:   +gross.toFixed(2),
+        opex:    +v.opex.toFixed(2),
+        net:     +net.toFixed(2),
       };
     });
 
     // сортировка по месяцу
-    if (groupBy === "month") {
-      arr.sort((a,b)=> a.key < b.key ? -1 : 1);
-    }
+    if (groupBy === "month") arr.sort((a,b)=> (a.key < b.key ? -1 : 1));
 
-    // totals (на случай groupBy=month показать итоги в футере)
+    // totals (выводим всегда — даже при одной строке удобно сверять)
     const totals = arr.reduce((s,r)=>({
       revenue: s.revenue + r.revenue,
       cogs:    s.cogs    + r.cogs,
@@ -146,13 +196,16 @@ export default function PLPage() {
       net:     s.net     + r.net,
     }), { revenue:0, cogs:0, gross:0, opex:0, net:0 });
 
-    return { rows: arr, totals: {
-      revenue:+totals.revenue.toFixed(2),
-      cogs:+totals.cogs.toFixed(2),
-      gross:+totals.gross.toFixed(2),
-      opex:+totals.opex.toFixed(2),
-      net:+totals.net.toFixed(2),
-    }};
+    return {
+      rows: arr,
+      totals: {
+        revenue:+totals.revenue.toFixed(2),
+        cogs:   +totals.cogs.toFixed(2),
+        gross:  +totals.gross.toFixed(2),
+        opex:   +totals.opex.toFixed(2),
+        net:    +totals.net.toFixed(2),
+      }
+    };
   }, [tx, catById, fxList, dateFrom, dateTo, groupBy]);
 
   function setPreset(p: "thisMonth"|"prevMonth"|"ytd") {
@@ -180,9 +233,7 @@ export default function PLPage() {
     for (const r of rows.rows) {
       lines.push([r.key, r.revenue, r.cogs, r.gross, r.opex, r.net].join(","));
     }
-    if (rows.rows.length > 1) {
-      lines.push(["ИТОГО", rows.totals.revenue, rows.totals.cogs, rows.totals.gross, rows.totals.opex, rows.totals.net].join(","));
-    }
+    lines.push(["ИТОГО", rows.totals.revenue, rows.totals.cogs, rows.totals.gross, rows.totals.opex, rows.totals.net].join(","));
     const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -224,7 +275,7 @@ export default function PLPage() {
           </div>
           <div className="sm:col-span-2 flex items-end">
             <div className="text-xs text-gray-600">
-              Учитываются только транзакции со статусом <b>Факт</b> и <b>Сверено</b>. Переводы между счетами исключены.
+              Учитываются только транзакции со статусом <b>Факт</b> и <b>Сверено</b>. Переводы между счетами исключены. Суммы в EUR.
             </div>
           </div>
         </div>
@@ -245,7 +296,9 @@ export default function PLPage() {
             <tbody>
               {rows.rows.map(r=>(
                 <tr key={r.key} className="text-center">
-                  <td className="border px-2 py-1">{groupBy==="month" ? r.key : `${dateFrom} — ${dateTo}`}</td>
+                  <td className="border px-2 py-1">
+                    {groupBy==="month" ? r.key : `${dateFrom} — ${dateTo}`}
+                  </td>
                   <td className="border px-2 py-1 text-right">{r.revenue.toFixed(2)}</td>
                   <td className="border px-2 py-1 text-right">{r.cogs.toFixed(2)}</td>
                   <td className="border px-2 py-1 text-right">{r.gross.toFixed(2)}</td>
@@ -257,18 +310,16 @@ export default function PLPage() {
                 <tr><td colSpan={6} className="border px-2 py-4 text-center text-gray-500">Нет данных за выбранный период</td></tr>
               )}
             </tbody>
-            {rows.rows.length>1 && (
-              <tfoot className="bg-gray-100 font-semibold">
-                <tr>
-                  <td className="border px-2 py-1 text-right">Итого:</td>
-                  <td className="border px-2 py-1 text-right">{rows.totals.revenue.toFixed(2)}</td>
-                  <td className="border px-2 py-1 text-right">{rows.totals.cogs.toFixed(2)}</td>
-                  <td className="border px-2 py-1 text-right">{rows.totals.gross.toFixed(2)}</td>
-                  <td className="border px-2 py-1 text-right">{rows.totals.opex.toFixed(2)}</td>
-                  <td className="border px-2 py-1 text-right">{rows.totals.net.toFixed(2)}</td>
-                </tr>
-              </tfoot>
-            )}
+            <tfoot className="bg-gray-100 font-semibold">
+              <tr>
+                <td className="border px-2 py-1 text-right">Итого:</td>
+                <td className="border px-2 py-1 text-right">{rows.totals.revenue.toFixed(2)}</td>
+                <td className="border px-2 py-1 text-right">{rows.totals.cogs.toFixed(2)}</td>
+                <td className="border px-2 py-1 text-right">{rows.totals.gross.toFixed(2)}</td>
+                <td className="border px-2 py-1 text-right">{rows.totals.opex.toFixed(2)}</td>
+                <td className="border px-2 py-1 text-right">{rows.totals.net.toFixed(2)}</td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>

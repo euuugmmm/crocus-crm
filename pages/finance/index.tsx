@@ -5,7 +5,7 @@ import Link from "next/link";
 import Head from "next/head";
 import { ArrowRight, BarChart3, CreditCard, CalendarDays, FileText, Layers, LineChart, PieChart, UploadCloud, Settings, Wallet } from "lucide-react";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
-
+import { Briefcase, Users2 } from "lucide-react";
 export default function FinanceIndex() {
   return (
     <ManagerLayout fullWidthHeader fullWidthMain>
@@ -112,9 +112,11 @@ export default function FinanceIndex() {
           <TinyTile href="/finance/counterparties" icon={<FileText className="w-4 h-4" />} title="Контрагенты" />
           <TinyTile href="/finance/accounts" icon={<Wallet className="w-4 h-4" />} title="Счета компании" />
           <TinyTile href="/finance/rates" icon={<PieChart className="w-4 h-4" />} title="Курсы валют(FX)" />
+          <TinyTile href="/finance/founders-report" icon={<Users2 className="w-4 h-4" />} title="Отчёт по учредителям" />
           <TinyTile href="/finance/planned" icon={<FileText className="w-4 h-4" />} title="Плановые операции" />
           <TinyTile href="/finance/import/mt940" icon={<UploadCloud className="w-4 h-4" />} title="Импорт выписок (MT940)" />
           <TinyTile href="/finance/setup" icon={<Settings className="w-4 h-4" />} title="Настройки модуля" />
+
         </div>
       </section>
 
@@ -211,3 +213,4 @@ function TinyTile({
     </Link>
   );
 }
+

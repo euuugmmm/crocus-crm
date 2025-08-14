@@ -27,6 +27,29 @@ const num = (v: any, d = 0) => {
   return Number.isFinite(n) ? n : d;
 };
 const r2 = (x: number) => Math.round(x * 100) / 100;
+const toLocalISO = (d = new Date()) => {
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return z.toISOString().slice(0, 10);
+};
+const next25th = (base = new Date()) => {
+  const d = new Date(base);
+  d.setMonth(d.getMonth() + 1);
+  const target = new Date(d.getFullYear(), d.getMonth(), 25);
+  return toLocalISO(target);
+};
+
+async function getAgentLabel(agentId: string) {
+  try {
+    const us = await db.doc(`users/${agentId}`).get();
+    if (!us.exists) return { label: "—", agencyName: "—", agentName: "—" };
+    const u = us.data() as any;
+    const agencyName = u.agencyName || u.agentAgency || "—";
+    const agentName = u.agentName || u.name || "—";
+    return { label: `${agencyName} — ${agentName}`, agencyName, agentName };
+  } catch {
+    return { label: "—", agencyName: "—", agentName: "—" };
+  }
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -41,12 +64,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       comment,       // строка
       withholdPct,   // число (например 0.12)
       items,         // [{bookingId, amountGross, closeFully}]
+      foundersDistribution, // опционально — игнорируется здесь
     } = req.body as {
       payoutId: string;
       transferFee?: number;
       comment?: string;
       withholdPct?: number;
-      items: Array<{ bookingId: string; amountGross: number; closeFully?: boolean }>;
+      items?: Array<{ bookingId: string; amountGross: number; closeFully?: boolean }>;
+      foundersDistribution?: any;
     };
 
     if (!payoutId) return res.status(400).json({ error: "payoutId is required" });
@@ -57,14 +82,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const pData = pSnap.data() as any;
     const agentId: string = pData.agentId;
-    const oldTransferFee = r2(num(pData.transferFee, 0));
-    const oldWithholdPct = r2(num(pData.withholdPct, withholdPct ?? 0.12));
-    const oldItems: Array<any> = Array.isArray(pData.items) ? pData.items : [];
+    const agentMeta = await getAgentLabel(agentId);
 
+    const oldTransferFee = r2(num(pData.transferFee, 0));
+    const oldWithholdPct = typeof pData.withholdPct === "number" ? Number(pData.withholdPct) : 0.12;
     const pct = typeof withholdPct === "number" ? Number(withholdPct) : oldWithholdPct;
     const toNet = (g: number) => r2(Math.max(0, g * (1 - pct)));
 
-    // индексы старых/новых
+    const oldItems: Array<any> = Array.isArray(pData.items) ? pData.items : [];
     const oldMap = new Map<string, any>();
     oldItems.forEach((it) => oldMap.set(String(it.bookingId), it));
 
@@ -95,69 +120,71 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (newIt.closeFully) row.closeFully = true;
       newItemsToStore.push(row);
     }
+    // если items не прислали — оставляем существующие
+    if (!items) {
+      newTotalGross = r2(num(pData.totalGross, oldItems.reduce((s, it) => s + num(it.amountGross, 0), 0)));
+      newItemsToStore.splice(0, newItemsToStore.length, ...oldItems);
+    }
+
     const newTotalNet = r2(toNet(newTotalGross));
     const newTransferFee = r2(Math.max(0, num(transferFee, oldTransferFee)));
     const newFact = r2(Math.max(0, newTotalNet - newTransferFee));
+    const taxPlannedAmount = r2(Math.max(0, newTotalGross - newTotalNet));
 
-    // агрегаты старых
-    const oldTotalGross = r2(num(pData.totalGross, oldItems.reduce((s, it) => s + num(it.amountGross, 0), 0)));
-    const oldTotalNet = r2(num(pData.totalNet, toNet(oldTotalGross)));
-    const oldFact = r2(num(pData.amount, Math.max(0, oldTotalNet - oldTransferFee)));
+    // обновляем брони по дельте, только если items прислали
+    if (items) {
+      await Promise.all(
+        Array.from(allBookingIds).map(async (bid) => {
+          const oldIt = oldMap.get(bid);
+          const newIt = newMap.get(bid);
+          if (!oldIt && !newIt) return;
 
-    // дельта по факту
-    const factDelta = r2(newFact - oldFact);
+          const ref = db.doc(`bookings/${bid}`);
+          await db.runTransaction(async (tx) => {
+            const bs = await tx.get(ref);
+            if (!bs.exists) return;
+            const b = bs.data() as any;
 
-    // обновляем брони по дельте
-    await Promise.all(
-      Array.from(allBookingIds).map(async (bid) => {
-        const oldIt = oldMap.get(bid);
-        const newIt = newMap.get(bid);
+            const commissionGross = r2(num(b.commissionGross ?? b.commission ?? b.agentCommission, oldIt?.commissionGross ?? 0));
+            const paidGrossCur = r2(num(b.commissionPaidGrossAmount, 0));
+            const paidNetCur   = r2(num(b.commissionPaidNetAmount ?? b.commissionPaidAmount, 0));
 
-        const ref = db.doc(`bookings/${bid}`);
-        await db.runTransaction(async (tx) => {
-          const bs = await tx.get(ref);
-          if (!bs.exists) return;
-          const b = bs.data() as any;
+            const oldGross = r2(num(oldIt?.amountGross, 0));
+            const newGross = r2(num(newIt?.amountGross, 0));
+            const deltaGross = r2(newGross - oldGross);
 
-          const commissionGross = r2(num(b.commissionGross ?? b.commission ?? b.agentCommission, oldIt?.commissionGross ?? 0));
-          const paidGrossCur = r2(num(b.commissionPaidGrossAmount, 0));
-          const paidNetCur   = r2(num(b.commissionPaidNetAmount ?? b.commissionPaidAmount, 0)); // читаем, но писать не будем в legacy
+            let newPaidGross = paidGrossCur;
+            let newPaidNet   = paidNetCur;
 
-          const oldGross = r2(num(oldIt?.amountGross, 0));
-          const newGross = r2(num(newIt?.amountGross, 0));
-          const deltaGross = r2(newGross - oldGross);
-
-          let newPaidGross = paidGrossCur;
-          let newPaidNet   = paidNetCur;
-
-          if (deltaGross !== 0) {
-            if (deltaGross > 0) {
-              newPaidGross = r2(Math.min(commissionGross, paidGrossCur + deltaGross));
-              newPaidNet   = r2(Math.min(toNet(commissionGross), paidNetCur + toNet(deltaGross)));
-            } else {
-              const decG = Math.min(Math.abs(deltaGross), paidGrossCur);
-              const decN = Math.min(toNet(Math.abs(deltaGross)), paidNetCur);
-              newPaidGross = r2(Math.max(0, paidGrossCur - decG));
-              newPaidNet   = r2(Math.max(0, paidNetCur   - decN));
+            if (deltaGross !== 0) {
+              if (deltaGross > 0) {
+                newPaidGross = r2(Math.min(commissionGross, paidGrossCur + deltaGross));
+                newPaidNet   = r2(Math.min(toNet(commissionGross), paidNetCur + toNet(deltaGross)));
+              } else {
+                const decG = Math.min(Math.abs(deltaGross), paidGrossCur);
+                const decN = Math.min(toNet(Math.abs(deltaGross)), paidNetCur);
+                newPaidGross = r2(Math.max(0, paidGrossCur - decG));
+                newPaidNet   = r2(Math.max(0, paidNetCur   - decN));
+              }
             }
-          }
 
-          const closeFully = !!(newIt?.closeFully);
-          const fullyPaid = closeFully || newPaidGross >= r2(Math.max(0, commissionGross - 0.01));
+            const closeFully = !!(newIt?.closeFully);
+            const fullyPaid = closeFully || newPaidGross >= r2(Math.max(0, commissionGross - 0.01));
 
-          const upd: any = {
-            commissionPaidGrossAmount: newPaidGross,
-            commissionPaidNetAmount: newPaidNet,
-            commissionPaid: fullyPaid,
-            updatedAt: FieldValue.serverTimestamp(),
-          };
+            const upd: any = {
+              commissionPaidGrossAmount: newPaidGross,
+              commissionPaidNetAmount: newPaidNet,
+              commissionPaid: fullyPaid,
+              updatedAt: FieldValue.serverTimestamp(),
+            };
 
-          tx.update(ref, upd);
-        });
-      })
-    );
+            tx.update(ref, upd);
+          });
+        })
+      );
+    }
 
-    // сбрасываем только файл/линк анексы (номер не трогаем)
+    // сбрасываем только файл/линк anexa (номер не трогаем)
     const unsetAnnex: any = {
       annexLink: FieldValue.delete(),
       annexPath: FieldValue.delete(),
@@ -175,15 +202,123 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...unsetAnnex,
     });
 
-    // правим баланс на дельту факта
-    if (agentId && factDelta !== 0) {
-      await db.doc(`users/${agentId}`).update({
-        balance: FieldValue.increment(-factDelta),
-        updatedAt: FieldValue.serverTimestamp(),
-      }).catch(() => null);
+    // ─────────────────────────────
+    // upsert ПЛАНОВЫЕ транзакции
+    // ─────────────────────────────
+    const txNetId: string | undefined = pData.txNetId;
+    const txTaxPlanId: string | undefined = pData.txTaxPlanId;
+
+    // даты: если транзакция уже есть — оставляем её дату; если нет — ставим дефолт
+    const nowISO = toLocalISO(new Date());
+    const defaultTaxDate = pData.createdAt?.toDate
+      ? next25th(pData.createdAt.toDate())
+      : next25th(new Date());
+
+    // NET (план)
+    let netDateISO = nowISO;
+    if (txNetId) {
+      const s = await db.doc(`finance_transactions/${txNetId}`).get();
+      if (s.exists) {
+        const v = s.data() as any;
+        netDateISO = v?.date || nowISO;
+        await s.ref.update({
+          status: "planned",
+          side: "expense",
+          baseCurrency: "EUR",
+          baseAmount: r2(newFact),
+          title: `Agent payout planned (net) — ${agentMeta.label}`,
+          categoryName: "Agent payout (planned)",
+          counterpartyName: agentMeta.label,
+          payoutId,
+          agentId,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } else {
+        const ref = await db.collection("finance_transactions").add({
+          status: "planned",
+          side: "expense",
+          date: netDateISO,
+          baseCurrency: "EUR",
+          baseAmount: r2(newFact),
+          title: `Agent payout planned (net) — ${agentMeta.label}`,
+          categoryName: "Agent payout (planned)",
+          counterpartyName: agentMeta.label,
+          payoutId,
+          agentId,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        await pRef.update({ txNetId: ref.id });
+      }
+    } else {
+      const ref = await db.collection("finance_transactions").add({
+        status: "planned",
+        side: "expense",
+        date: netDateISO,
+        baseCurrency: "EUR",
+        baseAmount: r2(newFact),
+        title: `Agent payout planned (net) — ${agentMeta.label}`,
+        categoryName: "Agent payout (planned)",
+        counterpartyName: agentMeta.label,
+        payoutId,
+        agentId,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      await pRef.update({ txNetId: ref.id });
     }
 
-    // удаляем старый файл анексы, если был
+    // TAX (план)
+    let taxDateISO = defaultTaxDate;
+    if (txTaxPlanId) {
+      const s = await db.doc(`finance_transactions/${txTaxPlanId}`).get();
+      if (s.exists) {
+        const v = s.data() as any;
+        taxDateISO = v?.date || defaultTaxDate;
+        await s.ref.update({
+          status: "planned",
+          side: "expense",
+          baseCurrency: "EUR",
+          baseAmount: r2(Math.max(0, newTotalGross - newTotalNet)),
+          title: `Agent payout tax planned (gross-net) — ${agentMeta.label}`,
+          categoryName: "Agent payout tax planned (gross-net)",
+          counterpartyName: agentMeta.label,
+          payoutId,
+          agentId,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } else {
+        const ref = await db.collection("finance_transactions").add({
+          status: "planned",
+          side: "expense",
+          date: taxDateISO,
+          baseCurrency: "EUR",
+          baseAmount: r2(Math.max(0, newTotalGross - newTotalNet)),
+          title: `Agent payout tax planned (gross-net) — ${agentMeta.label}`,
+          categoryName: "Agent payout tax planned (gross-net)",
+          counterpartyName: agentMeta.label,
+          payoutId,
+          agentId,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        await pRef.update({ txTaxPlanId: ref.id });
+      }
+    } else {
+      const ref = await db.collection("finance_transactions").add({
+        status: "planned",
+        side: "expense",
+        date: taxDateISO,
+        baseCurrency: "EUR",
+        baseAmount: r2(Math.max(0, newTotalGross - newTotalNet)),
+        title: `Agent payout tax planned (gross-net) — ${agentMeta.label}`,
+        categoryName: "Agent payout tax planned (gross-net)",
+        counterpartyName: agentMeta.label,
+        payoutId,
+        agentId,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      await pRef.update({ txTaxPlanId: ref.id });
+    }
+
+    // удаляем старый файл anexa, если был
     try {
       if (pData.annexPath) {
         await getStorage().bucket().file(String(pData.annexPath)).delete({ ignoreNotFound: true });
@@ -192,7 +327,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // не критично
     }
 
-    return res.status(200).json({ ok: true, payoutId, totalGross: newTotalGross, amount: newFact });
+    return res.status(200).json({
+      ok: true,
+      payoutId,
+      totalGross: newTotalGross,
+      amount: newFact,
+    });
   } catch (e: any) {
     console.error("update-payout error:", e);
     return res.status(500).json({ error: e.message || "Internal error" });

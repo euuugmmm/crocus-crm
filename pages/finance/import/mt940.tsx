@@ -13,6 +13,9 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  getDocs,
+  where,
+  limit,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import type {
@@ -50,6 +53,38 @@ const cleanForFirestore = (obj: Record<string, any>) =>
       ([, v]) => v !== undefined && v === v // отбрасываем undefined и NaN
     )
   );
+
+/** нормализация строк для ключа */
+const norm = (s?: string) =>
+  (s || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 120)
+    .toUpperCase();
+
+/** фиксируем число до 2 знаков (как строку) для стабильного ключа */
+const toFixed2 = (n: number) => (Math.round(n * 100) / 100).toFixed(2);
+
+/** формируем детерминированный ключ дедупликации */
+const makeDedupeKey = (p: {
+  accountId: string;
+  date: string; // YYYY-MM-DD
+  sign: "C" | "D";
+  amount: number; // signed в валюте счёта
+  code?: string;
+  reference?: string;
+}) => {
+  // включаем минимально достаточные признаки транзакции
+  return [
+    "TXV1", // версия ключа на будущее
+    p.accountId,
+    p.date,
+    p.sign,
+    toFixed2(p.amount),
+    norm(p.code),
+    norm(p.reference),
+  ].join("|");
+};
 
 export default function ImportMt940Page() {
   const router = useRouter();
@@ -161,6 +196,8 @@ export default function ImportMt940Page() {
     if (!picked.length) { alert("Не выбрано ни одной операции"); return; }
 
     let ok = 0;
+    let skipped = 0;
+
     for (const r of picked) {
       const id = (r as any).__id as string;
       const catId = rowCat[id] || defaultCatId || "";
@@ -174,6 +211,29 @@ export default function ImportMt940Page() {
       const fxRateToBase = eurRateFor(fxDoc, accCurrency);
       const baseAmount = +(signedAmount * fxRateToBase).toFixed(2);
 
+      // формируем ключ дедупликации (включая референс, если есть)
+      const dedupeKey = makeDedupeKey({
+        accountId: selectedAccount.id,
+        date: r.date,
+        sign: r.sign,
+        amount: signedAmount,
+        code: r.code,
+        reference: r.reference,
+      });
+
+      // быстрый поиск дубля
+      const dupSnap = await getDocs(
+        query(
+          collection(db, "finance_transactions"),
+          where("dedupeKey", "==", dedupeKey),
+          limit(1)
+        )
+      );
+      if (!dupSnap.empty) {
+        skipped++;
+        continue; // уже импортирована такая транзакция
+      }
+
       const payload = cleanForFirestore({
         date: r.date,                                     // YYYY-MM-DD
         status,                                           // planned | actual | reconciled
@@ -181,7 +241,7 @@ export default function ImportMt940Page() {
         method,                                           // bank/card/cash/iban/other
 
         // совместимый формат:
-        amount: +signedAmount.toFixed(2),                 // число в валюте счёта
+        amount: +toFixed2(signedAmount),                  // число в валюте счёта
         currency: accCurrency,                            // строка валюты счёта
         baseAmount,                                       // EUR
         fxRateToBase,                                     // CCY → EUR
@@ -194,6 +254,9 @@ export default function ImportMt940Page() {
         title: r.code ? `${r.code}${r.reference ? " "+r.reference : ""}` : undefined,
         note: r.description?.slice(0, 500) || undefined,
 
+        // ключ дедупликации
+        dedupeKey,
+
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -202,7 +265,7 @@ export default function ImportMt940Page() {
       ok++;
     }
 
-    alert(`Импортировано: ${ok}`);
+    alert(`Импортировано: ${ok}. Пропущено как дубли: ${skipped}.`);
     router.push("/finance/transactions");
   };
 
