@@ -1,28 +1,18 @@
 // lib/finance/tx.ts
 import {
-  Account,
-  Allocation,
-  Category,
-  Counterparty,
-  Currency,
-  FxDoc,
-  OwnerWho,
-  TxRow,
-  CategorySide,
+  Account, Allocation, Category, Counterparty, Currency, FxDoc, OwnerWho, TxRow, CategorySide,
 } from "@/types/finance";
 import { Timestamp, collection, query, where, getDocs, writeBatch, doc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { eurFrom, todayISO } from "./fx";
 
-/** безопасное число */
 const toNum = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const r2 = (x: number) => Math.round((Number(x) || 0) * 100) / 100;
 
-/** Нормализация Firestore-документа транзакции под UI */
+/** нормализация */
 export function normalizeTx(raw: any, accounts: Account[], fxList: FxDoc[]): TxRow {
   const side: CategorySide =
-    raw.side ||
-    (raw.type === "in" ? "income" : raw.type === "out" ? "expense" : "income");
+    raw.side || (raw.type === "in" ? "income" : raw.type === "out" ? "expense" : "income");
 
   const currency: Currency =
     raw.currency ||
@@ -30,16 +20,10 @@ export function normalizeTx(raw: any, accounts: Account[], fxList: FxDoc[]): TxR
     (accounts.find((a) => a.id === raw.accountId)?.currency as Currency) ||
     "EUR";
 
-  const rawAmt =
-    typeof raw.amount === "number"
-      ? Number(raw.amount || 0)
-      : Number(raw.amount?.value || 0);
-
+  const rawAmt = typeof raw.amount === "number" ? Number(raw.amount || 0) : Number(raw.amount?.value || 0);
   const dateStr: string = raw.date || todayISO();
 
-  const rawBase = Number(
-    raw.baseAmount ?? raw.eurAmount ?? eurFrom(rawAmt, currency, dateStr, fxList)
-  );
+  const rawBase = Number(raw.baseAmount ?? raw.eurAmount ?? eurFrom(rawAmt, currency, dateStr, fxList));
 
   const amount = Math.abs(rawAmt);
   const baseAmount = Math.abs(rawBase);
@@ -61,10 +45,7 @@ export function normalizeTx(raw: any, accounts: Account[], fxList: FxDoc[]): TxR
     ownerWho: (raw.ownerWho as OwnerWho) ?? null,
     bookingId: raw.bookingId ?? null,
     bookingAllocations: Array.isArray(raw.bookingAllocations)
-      ? raw.bookingAllocations.map((a: any) => ({
-          bookingId: String(a.bookingId),
-          amountBase: Number(a.amountBase || 0),
-        }))
+      ? raw.bookingAllocations.map((a: any) => ({ bookingId: String(a.bookingId), amountBase: Number(a.amountBase || 0) }))
       : undefined,
     note: raw.note ?? "",
     method: raw.method,
@@ -72,7 +53,7 @@ export function normalizeTx(raw: any, accounts: Account[], fxList: FxDoc[]): TxR
     createdAt: raw.createdAt,
   };
 
-  // --- ВАЖНО: прокидываем точные суммы распределения по учредителям ---
+  // точные суммы сплита
   (row as any).ownerIgorEUR     = Number(raw.ownerIgorEUR || 0);
   (row as any).ownerEvgeniyEUR  = Number(raw.ownerEvgeniyEUR || 0);
   (row as any).foundersTotalEUR = Number(raw.foundersTotalEUR || 0);
@@ -80,15 +61,10 @@ export function normalizeTx(raw: any, accounts: Account[], fxList: FxDoc[]): TxR
   return row;
 }
 
-/** Payload для Firestore (канонический формат, положительные суммы) */
+/** payload */
 export function buildTxPayload(
   data: Partial<TxRow>,
-  deps: {
-    accounts: Account[];
-    categories: Category[];
-    counterparties: Counterparty[];
-    fxList: FxDoc[];
-  },
+  deps: { accounts: Account[]; categories: Category[]; counterparties: Counterparty[]; fxList: FxDoc[]; },
   forId?: string
 ) {
   const { accounts, categories, counterparties, fxList } = deps;
@@ -97,16 +73,14 @@ export function buildTxPayload(
 
   const amtAbs = Math.abs(toNum(data.amount));
   const eurAbs =
-    data.baseAmount != null
-      ? Math.abs(toNum(data.baseAmount))
-      : Math.abs(eurFrom(amtAbs, ccy, data.date || todayISO(), fxList));
+    data.baseAmount != null ? Math.abs(toNum(data.baseAmount)) : Math.abs(eurFrom(amtAbs, ccy, data.date || todayISO(), fxList));
 
   const cat = categories.find((c) => c.id === data.categoryId);
   const cp = counterparties.find((x) => x.id === data.counterpartyId);
 
   const side = (data.side || "income") as CategorySide;
 
-  // точные суммы по учредителям (если side=expense и пришли из формы)
+  // точные суммы сплита, только для расхода
   const igorEUR = side === "expense" ? r2((data as any)?.ownerIgorEUR ?? 0) : 0;
   const evgEUR  = side === "expense" ? r2((data as any)?.ownerEvgeniyEUR ?? 0) : 0;
   const foundersTotalEUR = side === "expense" ? r2(igorEUR + evgEUR) : 0;
@@ -120,9 +94,8 @@ export function buildTxPayload(
 
     currency: ccy,
     side,
-    type: side === "income" ? "in" : "out", // для совместимости
+    type: side === "income" ? "in" : "out",
 
-    // суммы в канонике — положительные
     amount: { value: +amtAbs.toFixed(2), currency: ccy },
     baseAmount: +eurAbs.toFixed(2),
 
@@ -132,10 +105,8 @@ export function buildTxPayload(
     counterpartyId: data.counterpartyId ?? null,
     counterpartyName: cp?.name || null,
 
-    // «лайт-метка» владения (legacy): сохраняем только для расходов
     ownerWho: side === "expense" ? ((data.ownerWho ?? null) as OwnerWho) : null,
 
-    // точные суммы по учредителям (кастомный сплит)
     ...(side === "expense"
       ? {
           ownerIgorEUR: igorEUR || 0,
@@ -144,7 +115,7 @@ export function buildTxPayload(
         }
       : {}),
 
-    bookingId: (data.bookingId ?? null) || null, // одиночная ссылка для совместимости
+    bookingId: (data.bookingId ?? null) || null,
     note: (data.note || "").trim(),
     method: data.method || "bank",
 
@@ -156,19 +127,19 @@ export function buildTxPayload(
   return payload;
 }
 
-/** Пересобираем ордера под транзакцию (удаляем старые, создаём текущие) */
+/** upsert orders for transaction */
 export async function upsertOrdersForTransaction(
   txId: string,
   payload: any,
   allocations: Allocation[]
 ) {
-  // 1) удалить прежние
+  // удаляем старые
   const q = query(collection(db, "finance_orders"), where("txId", "==", txId));
   const snap = await getDocs(q);
   const batch = writeBatch(db);
   snap.forEach((d) => batch.delete(d.ref));
 
-  // 2) создать новые
+  // создаём новые
   const date = payload.date;
   const side = payload.side;
   const accountId = payload.accountId ?? null;
@@ -184,7 +155,7 @@ export async function upsertOrdersForTransaction(
       side,
       accountId,
       currency,
-      amount, // справочно
+      amount,
       baseAmount: +Number(a.amountBase).toFixed(2),
       bookingId: a.bookingId,
       note: payload.note || null,
@@ -197,7 +168,7 @@ export async function upsertOrdersForTransaction(
   await batch.commit();
 }
 
-/** Удалить транзакцию вместе с её ордерами */
+/** remove tx + orders */
 export async function removeTxWithOrders(txId: string) {
   const q = query(collection(db, "finance_orders"), where("txId", "==", txId));
   const snap = await getDocs(q);

@@ -6,16 +6,7 @@ import { Button } from "@/components/ui/button";
 import BookingQuickSearch from "@/components/finance/BookingQuickSearch";
 import AllocationsEditor from "@/components/finance/AllocationsEditor";
 import {
-  Account,
-  Allocation,
-  BookingOption,
-  Category,
-  CategorySide,
-  Counterparty,
-  Currency,
-  FxDoc,
-  OwnerWho,
-  TxRow,
+  Account, Allocation, BookingOption, Category, CategorySide, Counterparty, Currency, FxDoc, OwnerWho, TxRow,
 } from "@/types/finance";
 import { buildTxPayload, upsertOrdersForTransaction } from "@/lib/finance/tx";
 import { eurFrom } from "@/lib/finance/fx";
@@ -25,6 +16,12 @@ import { Briefcase, Users2 } from "lucide-react";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const r2 = (x: number) => Math.round((Number(x) || 0) * 100) / 100;
+function clamp01n(x: number, total: number) {
+  if (!Number.isFinite(x)) return 0;
+  if (x < 0) return 0;
+  if (x > total) return total;
+  return x;
+}
 
 function Field({ label, children, full }: { label: string; children: React.ReactNode; full?: boolean }) {
   return (
@@ -38,16 +35,8 @@ function Field({ label, children, full }: { label: string; children: React.React
 type TargetMode = "bookings" | "founders";
 
 export default function TxModal({
-  open,
-  onClose,
-  onSaved,
-  initial,
-  accounts,
-  categories,
-  counterparties,
-  fxList,
-  bookingOptionsMap,
-  existingAllocations = [],
+  open, onClose, onSaved, initial,
+  accounts, categories, counterparties, fxList, bookingOptionsMap, existingAllocations = [],
 }: {
   open: boolean;
   onClose: () => void;
@@ -58,19 +47,18 @@ export default function TxModal({
   counterparties: Counterparty[];
   fxList: FxDoc[];
   bookingOptionsMap: Map<string, BookingOption>;
-  /** аллокации, уже сохранённые в finance_orders по этой транзакции (источник факта) */
   existingAllocations?: Allocation[];
 }) {
   const isEdit = !!initial?.id;
 
-  // ---- форма
+  // форма
   const [form, setForm] = useState<Partial<TxRow>>({
     date: todayISO(),
     accountId: "",
     currency: "EUR" as Currency,
     side: "income",
     amount: 0,
-    baseAmount: 0,
+    baseAmount: undefined,
     categoryId: null,
     counterpartyId: null,
     ownerWho: null,
@@ -81,17 +69,18 @@ export default function TxModal({
     status: "actual",
   });
 
-  // назначение: заявки / учредители (кнопки-иконки)
+  // вкладка
   const [target, setTarget] = useState<TargetMode>("bookings");
 
-  // founders split amounts (EUR)
+  // founders split
   const [igorEUR, setIgorEUR] = useState<string>("");
-  const [evgEUR, setEvgEUR]   = useState<string>("");
+  const [evgEUR,  setEvgEUR]  = useState<string>("");
   const [lastEdited, setLastEdited] = useState<"igor" | "evg" | null>(null);
 
   // поиск заявки
   const [bookingSearch, setBookingSearch] = useState("");
 
+  // init/open
   useEffect(() => {
     if (!open) return;
     if (initial && isEdit) {
@@ -103,11 +92,12 @@ export default function TxModal({
         bookingId: "",
       });
 
-      // если это расход по учредителям — покажем founders; подтянем сохранённые суммы
-      const initOwner = (initial as any)?.ownerWho as OwnerWho | null | undefined;
+      // показать founders если это расход и есть точные суммы/ownerWho
       const igSaved = Number((initial as any)?.ownerIgorEUR || 0);
       const evSaved = Number((initial as any)?.ownerEvgeniyEUR || 0);
-      setTarget((initOwner || igSaved > 0 || evSaved > 0) ? "founders" : "bookings");
+      const initOwner = (initial as any)?.ownerWho as OwnerWho | null | undefined;
+
+      setTarget((form.side === "expense" && (initOwner || igSaved > 0 || evSaved > 0)) ? "founders" : "bookings");
       setIgorEUR(igSaved > 0 ? String(r2(igSaved)) : "");
       setEvgEUR(evSaved > 0 ? String(r2(evSaved)) : "");
       setBookingSearch("");
@@ -119,7 +109,7 @@ export default function TxModal({
         currency: (firstAcc?.currency as Currency) || "EUR",
         side: "income",
         amount: 0,
-        baseAmount: 0,
+        baseAmount: undefined,
         categoryId: null,
         counterpartyId: null,
         ownerWho: null,
@@ -137,7 +127,7 @@ export default function TxModal({
     }
   }, [open, isEdit, initial, accounts]);
 
-  // следим за валютой по счёту
+  // sync currency to account
   useEffect(() => {
     if (!form.accountId) return;
     const acc = accounts.find((a) => a.id === form.accountId);
@@ -146,43 +136,17 @@ export default function TxModal({
     }
   }, [form.accountId, accounts]); // eslint-disable-line
 
-  // переключение режимов: при входе в founders — сгенерировать 50/50 по текущей базе
+  // авто-переключение вкладки по типу
   useEffect(() => {
-    if (target !== "founders") return;
-    const total = foundersEUR;
-    if (total <= 0) {
-      setIgorEUR("0");
-      setEvgEUR("0");
-      setLastEdited(null);
-      return;
-    }
-    if (igorEUR === "" && evgEUR === "") {
-      const half = r2(total / 2);
-      setIgorEUR(String(half));
-      setEvgEUR(String(r2(total - half)));
-      setLastEdited(null);
-    } else {
-      if (lastEdited === "igor") {
-        const ig = clamp01n(+Number(igorEUR), total);
-        setIgorEUR(String(r2(ig)));
-        setEvgEUR(String(r2(total - ig)));
-      } else if (lastEdited === "evg") {
-        const ev = clamp01n(+Number(evgEUR), total);
-        setEvgEUR(String(r2(ev)));
-        setIgorEUR(String(r2(total - ev)));
-      } else {
-        const ig = clamp01n(+Number(igorEUR), total);
-        setIgorEUR(String(r2(ig)));
-        setEvgEUR(String(r2(total - ig)));
-      }
-    }
-    // не трогаем form.ownerWho — пресет задаётся селектором ниже
+    if (!open) return;
+    if (form.side === "expense") setTarget("founders");
+    else setTarget("bookings");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target]);
+  }, [form.side]);
 
   const isIncome = form.side === "income";
 
-  // EUR суммы из формы (приоритет baseAmount, иначе конверсия amount)
+  // EUR из формы
   const formEUR = useMemo(() => {
     const ccy = (form.currency as Currency) || "EUR";
     return form.baseAmount != null
@@ -196,7 +160,7 @@ export default function TxModal({
     [existingAllocations]
   );
 
-  // сколько добавляем в этой сессии
+  // добавляем сейчас
   const addedNowEUR = useMemo(
     () => (form.bookingAllocations || []).reduce((s, a) => s + Math.max(0, Number(a.amountBase || 0)), 0),
     [form.bookingAllocations]
@@ -208,22 +172,23 @@ export default function TxModal({
     [formEUR, alreadyAllocatedEUR, addedNowEUR]
   );
 
-  // общая сумма, доступная учредителям = EUR формы − факт по заявкам
+  // доступно учредителям = EUR формы − факт по заявкам
   const foundersEUR = useMemo(
     () => +Math.max(0, formEUR - alreadyAllocatedEUR).toFixed(2),
     [formEUR, alreadyAllocatedEUR]
   );
 
-  // синхронизировать второе поле учредителей при изменении первого / изменении total
+  // когда меняется foundersEUR — подставим 50/50 (если ничего не вводили)
   useEffect(() => {
+    if (!open) return;
     if (target !== "founders") return;
     const total = foundersEUR;
     if (lastEdited === "igor") {
-      const ig = clamp01n(+Number(igorEUR), total);
+      const ig = clamp01n(+Number(igorEUR || 0), total);
       setIgorEUR(String(r2(ig)));
       setEvgEUR(String(r2(total - ig)));
     } else if (lastEdited === "evg") {
-      const ev = clamp01n(+Number(evgEUR), total);
+      const ev = clamp01n(+Number(evgEUR || 0), total);
       setEvgEUR(String(r2(ev)));
       setIgorEUR(String(r2(total - ev)));
     } else {
@@ -232,9 +197,9 @@ export default function TxModal({
       setEvgEUR(String(r2(total - half)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [foundersEUR, target]);
+  }, [foundersEUR, target, open]);
 
-  // «наложенная» карта опций для живого уменьшения остатков
+  // «наложенная» карта опций
   const optionsOverlayMap: Map<string, BookingOption> = useMemo(() => {
     const delta = new Map<string, number>();
     for (const a of form.bookingAllocations || []) {
@@ -259,14 +224,12 @@ export default function TxModal({
     return out;
   }, [bookingOptionsMap, form.bookingAllocations, form.side]);
 
-  // текущая заявка
   const currentBookingOption = useMemo(() => {
     const id = form.bookingId || form.bookingAllocations?.[0]?.bookingId;
     if (!id) return null;
     return optionsOverlayMap.get(id) || null;
   }, [form.bookingId, form.bookingAllocations, optionsOverlayMap]);
 
-  // добавить аллокацию по выбранной заявке
   const addAllocationFromSelect = () => {
     if (target !== "bookings") return;
     if (allocateRemain <= 0) return;
@@ -279,7 +242,6 @@ export default function TxModal({
     if (!isIncome && (!leftHere || leftHere <= 0) && (opt.clientOverpay || 0) > 0) {
       leftHere = opt.clientOverpay!;
     }
-
     const base = leftHere && leftHere > 0 ? leftHere : allocateRemain;
     const amount = Math.min(base, allocateRemain);
     if (amount <= 0) return;
@@ -298,31 +260,17 @@ export default function TxModal({
     setForm((s) => ({ ...s, bookingAllocations: allocs }));
   };
 
-  /** быстрый пресет «чья затрата»: проставляет ownerWho и суммы */
   const applyOwnerPreset = (preset: OwnerWho | "" ) => {
     const total = foundersEUR;
-    if (!preset) {
-      // сброс пресета — оставляем текущие суммы, ownerWho -> null
-      setForm(s => ({ ...s, ownerWho: null }));
-      return;
-    }
-    if (preset === "igor") {
-      setIgorEUR(String(r2(total)));
-      setEvgEUR("0");
-    } else if (preset === "evgeniy") {
-      setIgorEUR("0");
-      setEvgEUR(String(r2(total)));
-    } else if (preset === "split50" || (preset as string) === "crocus") {
-      const half = r2(total / 2);
-      setIgorEUR(String(half));
-      setEvgEUR(String(r2(total - half)));
-      preset = "split50"; // нормализуем значение
-    }
+    if (!preset) { setForm(s => ({ ...s, ownerWho: null })); return; }
+    if (preset === "igor")      { setIgorEUR(String(r2(total))); setEvgEUR("0"); }
+    else if (preset === "evgeniy") { setIgorEUR("0"); setEvgEUR(String(r2(total))); }
+    else { const half = r2(total / 2); setIgorEUR(String(half)); setEvgEUR(String(r2(total - half))); preset = "split50"; }
     setLastEdited(null);
     setForm(s => ({ ...s, ownerWho: preset as OwnerWho }));
   };
 
-  // валидация и сохранение
+  // save
   const save = async () => {
     if (!form.date || !form.accountId || !form.side) {
       alert("Дата, счёт и тип обязательны");
@@ -336,8 +284,12 @@ export default function TxModal({
         ...(existingAllocations || []),
         ...((form.bookingAllocations || []).map(a => ({ bookingId: a.bookingId, amountBase: +Number(a.amountBase || 0).toFixed(2) }))),
       ];
+      const formEURabs =
+        form.baseAmount != null
+          ? Math.abs(Number(form.baseAmount))
+          : Math.abs(eurFrom(Number(form.amount || 0), (form.currency as Currency) || "EUR", form.date || todayISO(), fxList));
       const finalSum = finalAllocs.reduce((s, a) => s + Math.max(0, a.amountBase), 0);
-      if (finalSum - formEUR > 0.01) {
+      if (finalSum - formEURabs > 0.01) {
         const ok = confirm("Распределено больше, чем сумма транзакции в EUR. Сохранить всё равно?");
         if (!ok) return;
       }
@@ -355,19 +307,17 @@ export default function TxModal({
       }
     }
 
-    // владельцы: сохраняем точные суммы, а ownerWho — «лайт-метка»
+    // готовим payload
     let ownerWhoAuto: OwnerWho | null = form.ownerWho ?? null;
-    let ownerIgorEUR = 0, ownerEvgeniyEUR = 0, foundersTotalEUR = 0;
+    let ownerIgorEUR = 0, ownerEvgeniyEUR = 0;
 
     if (target === "founders") {
       ownerIgorEUR = r2(+Number(igorEUR || 0));
       ownerEvgeniyEUR = r2(+Number(evgEUR  || 0));
-      foundersTotalEUR = r2(ownerIgorEUR + ownerEvgeniyEUR);
-
-      // если пользователь руками изменил суммы — ownerWhoAuto может стать null (кастомный сплит)
+      // авто-метка только если 100/0, 0/100 или 50/50
       if (ownerIgorEUR > 0 && ownerEvgeniyEUR === 0) ownerWhoAuto = "igor";
       else if (ownerEvgeniyEUR > 0 && ownerIgorEUR === 0) ownerWhoAuto = "evgeniy";
-      else if (Math.abs(ownerIgorEUR - ownerEvgeniyEUR) <= 0.01 && foundersTotalEUR > 0) ownerWhoAuto = "split50";
+      else if (Math.abs(ownerIgorEUR - ownerEvgeniyEUR) <= 0.01 && (ownerIgorEUR + ownerEvgeniyEUR) > 0) ownerWhoAuto = "split50";
       else ownerWhoAuto = null;
     }
 
@@ -375,10 +325,8 @@ export default function TxModal({
       {
         ...form,
         ownerWho: ownerWhoAuto,
-        // по заявкам — сохраняем все аллокации; по учредителям — только существующие (не трогаем ордера)
         bookingAllocations: target === "bookings" ? finalAllocs : existingAllocations,
-        // точные суммы по учредителям (нужны, чтобы кастомный сплит сохранялся):
-        ...(target === "founders" ? { ownerIgorEUR, ownerEvgeniyEUR, foundersTotalEUR } : {}),
+        ...(target === "founders" ? { ownerIgorEUR, ownerEvgeniyEUR } : {}),
       },
       { accounts, categories, counterparties, fxList },
       initial?.id || undefined
@@ -412,19 +360,12 @@ export default function TxModal({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
           <Field label="Дата">
-            <input
-              type="date"
-              className="w-full border rounded px-2 py-1"
-              value={form.date || ""}
-              onChange={(e) => setForm((s) => ({ ...s, date: e.target.value }))}
-            />
+            <input type="date" className="w-full border rounded px-2 py-1"
+              value={form.date || ""} onChange={(e) => setForm((s) => ({ ...s, date: e.target.value }))}/>
           </Field>
           <Field label="Счёт">
-            <select
-              className="w-full border rounded px-2 py-1"
-              value={form.accountId || ""}
-              onChange={(e) => setForm((s) => ({ ...s, accountId: e.target.value }))}
-            >
+            <select className="w-full border rounded px-2 py-1"
+              value={form.accountId || ""} onChange={(e) => setForm((s) => ({ ...s, accountId: e.target.value }))}>
               <option value="" disabled>— выберите счёт —</option>
               {accounts.filter((a) => !a.archived).map((a) => (
                 <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
@@ -433,28 +374,17 @@ export default function TxModal({
           </Field>
 
           <Field label="Тип">
-            <select
-              className="w-full border rounded px-2 py-1"
+            <select className="w-full border rounded px-2 py-1"
               value={form.side || "income"}
-              onChange={(e) =>
-                setForm((s) => ({
-                  ...s,
-                  side: e.target.value as CategorySide,
-                  bookingId: "",
-                  bookingAllocations: [],
-                }))
-              }
-            >
+              onChange={(e) => setForm((s) => ({ ...s, side: e.target.value as CategorySide, bookingId: "", bookingAllocations: [] }))}>
               <option value="income">Доход</option>
               <option value="expense">Расход</option>
             </select>
           </Field>
           <Field label="Категория">
-            <select
-              className="w-full border rounded px-2 py-1"
+            <select className="w-full border rounded px-2 py-1"
               value={form.categoryId ?? ""}
-              onChange={(e) => setForm((s) => ({ ...s, categoryId: e.target.value || null }))}
-            >
+              onChange={(e) => setForm((s) => ({ ...s, categoryId: e.target.value || null }))}>
               <option value="">— не задано —</option>
               {categories.filter((c) => !c.archived && c.side === form.side).map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
@@ -463,25 +393,17 @@ export default function TxModal({
           </Field>
 
           <Field label={`Сумма (${form.currency})`}>
-            <input
-              type="number"
-              step="0.01"
-              className="w-full border rounded px-2 py-1"
+            <input type="number" step="0.01" className="w-full border rounded px-2 py-1"
               value={form.amount ?? 0}
-              onChange={(e) => setForm((s) => ({ ...s, amount: Number(e.target.value || 0) }))}
-            />
+              onChange={(e) => setForm((s) => ({ ...s, amount: Number(e.target.value || 0) }))}/>
             {isEdit && alreadyAllocatedEUR > 0 && (
-              <div className="text-[11px] text-gray-600 mt-1">
-                Уже распределено (по ордерам): {alreadyAllocatedEUR.toFixed(2)} €
-              </div>
+              <div className="text-[11px] text-gray-600 mt-1">Уже распределено (по ордерам): {alreadyAllocatedEUR.toFixed(2)} €</div>
             )}
           </Field>
           <Field label="Контрагент">
-            <select
-              className="w-full border rounded px-2 py-1"
+            <select className="w-full border rounded px-2 py-1"
               value={form.counterpartyId ?? ""}
-              onChange={(e) => setForm((s) => ({ ...s, counterpartyId: e.target.value || null }))}
-            >
+              onChange={(e) => setForm((s) => ({ ...s, counterpartyId: e.target.value || null }))}>
               <option value="">— не задан —</option>
               {counterparties.filter((x) => !x.archived).map((x) => (
                 <option key={x.id} value={x.id}>{x.name}</option>
@@ -489,30 +411,22 @@ export default function TxModal({
             </select>
           </Field>
 
-          {/* назначение — кнопки без текста */}
+          {/* назначение */}
           <Field label="Назначение" full>
             <div className="inline-flex gap-2">
-              <button
-                className={`px-3 py-2 rounded-lg border ${target === "bookings" ? "bg-blue-50 border-blue-400 text-blue-700" : ""}`}
-                title="По заявкам"
-                onClick={() => setTarget("bookings")}
-              >
+              <button className={`px-3 py-2 rounded-lg border ${target === "bookings" ? "bg-blue-50 border-blue-400 text-blue-700" : ""}`} title="По заявкам" onClick={() => setTarget("bookings")}>
                 <Briefcase className="w-4 h-4" />
               </button>
-              <button
-                className={`px-3 py-2 rounded-lg border ${target === "founders" ? "bg-blue-50 border-blue-400 text-blue-700" : ""}`}
-                title="Учредители"
-                onClick={() => setTarget("founders")}
-              >
+              <button className={`px-3 py-2 rounded-lg border ${target === "founders" ? "bg-blue-50 border-blue-400 text-blue-700" : ""}`} title="Учредители" onClick={() => setTarget("founders")}>
                 <Users2 className="w-4 h-4" />
               </button>
             </div>
           </Field>
 
-          {/* Режим: ЗАЯВКИ */}
+          {/* ЗАЯВКИ */}
           {target === "bookings" && (
             <>
-              <Field label={`Заявка (${isIncome ? "неоплаченные по клиенту" : "остаток оплаты оператору / переплата клиента"})`} full>
+              <Field label={`Заявка (${form.side === "income" ? "неоплаченные по клиенту" : "остаток оплаты оператору / переплата клиента"})`} full>
                 <BookingQuickSearch
                   side={form.side as CategorySide}
                   search={bookingSearch}
@@ -524,9 +438,7 @@ export default function TxModal({
                   currentOption={currentBookingOption || undefined}
                 />
                 {allocateRemain <= 0 && (
-                  <div className="text-[11px] text-emerald-700 mt-1">
-                    Остаток к распределению: 0 € — добавлять новые строки нельзя.
-                  </div>
+                  <div className="text-[11px] text-emerald-700 mt-1">Остаток к распределению: 0 € — добавлять новые строки нельзя.</div>
                 )}
               </Field>
 
@@ -543,25 +455,18 @@ export default function TxModal({
             </>
           )}
 
-          {/* Режим: УЧРЕДИТЕЛИ */}
+          {/* УЧРЕДИТЕЛИ */}
           {target === "founders" && (
             <>
               <Field label="К распределению между учредителями (EUR)" full>
                 <div className="inline-flex items-center gap-2 text-sm">
-                  <div className="px-2 py-1 rounded border bg-gray-50">
-                    Всего: <b>{foundersEUR.toFixed(2)} €</b>
-                  </div>
+                  <div className="px-2 py-1 rounded border bg-gray-50">Всего: <b>{foundersEUR.toFixed(2)} €</b></div>
                 </div>
               </Field>
 
-              {/* Селектор пресета «чья затрата» */}
               {form.side === "expense" && (
                 <Field label="Чья затрата (пресет)">
-                  <select
-                    className="w-full border rounded px-2 py-1"
-                    value={form.ownerWho ?? ""}
-                    onChange={(e) => applyOwnerPreset(e.target.value as OwnerWho | "")}
-                  >
+                  <select className="w-full border rounded px-2 py-1" value={form.ownerWho ?? ""} onChange={(e) => applyOwnerPreset(e.target.value as OwnerWho | "")}>
                     <option value="">— не выбрано —</option>
                     <option value="igor">Игорь</option>
                     <option value="evgeniy">Евгений</option>
@@ -569,14 +474,9 @@ export default function TxModal({
                   </select>
                 </Field>
               )}
-              <div>
-              </div>
+              <div></div>
               <Field label="Игорь (EUR)">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className="w-full border rounded px-2 py-1 text-right"
+                <input type="number" min="0" step="0.01" className="w-full border rounded px-2 py-1 text-right"
                   value={igorEUR}
                   onChange={(e) => {
                     setLastEdited("igor");
@@ -584,17 +484,11 @@ export default function TxModal({
                     const ig = clamp01n(+Number(e.target.value || 0), total);
                     setIgorEUR(String(r2(ig)));
                     setEvgEUR(String(r2(total - ig)));
-                    // кастомная правка — снимаем пресет
                     setForm(s => ({ ...s, ownerWho: null }));
-                  }}
-                />
+                  }}/>
               </Field>
               <Field label="Евгений (EUR)">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className="w-full border rounded px-2 py-1 text-right"
+                <input type="number" min="0" step="0.01" className="w-full border rounded px-2 py-1 text-right"
                   value={evgEUR}
                   onChange={(e) => {
                     setLastEdited("evg");
@@ -602,35 +496,22 @@ export default function TxModal({
                     const ev = clamp01n(+Number(e.target.value || 0), total);
                     setEvgEUR(String(r2(ev)));
                     setIgorEUR(String(r2(total - ev)));
-                    // кастомная правка — снимаем пресет
                     setForm(s => ({ ...s, ownerWho: null }));
-                  }}
-                />
+                  }}/>
               </Field>
             </>
           )}
 
           <Field label="Заметка" full>
-            <input
-              className="w-full border rounded px-2 py-1"
-              value={form.note || ""}
-              onChange={(e) => setForm((s) => ({ ...s, note: e.target.value }))}
-              placeholder="комментарий"
-            />
+            <input className="w-full border rounded px-2 py-1" value={form.note || ""} onChange={(e) => setForm((s) => ({ ...s, note: e.target.value }))} placeholder="комментарий" />
           </Field>
         </div>
 
         <div className="mt-4 flex items-center justify-between gap-2">
-          <div className="text-xs text-gray-600">
-            Подсказка: возврат клиенту делайте как расход — переплата исчезнет из списка сразу.
-          </div>
+          <div className="text-xs text-gray-600">Подсказка: возврат клиенту делайте как расход — переплата исчезнет из списка сразу.</div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={onClose} className="h-8 px-3 text-xs">Отмена</Button>
-            <Button
-              onClick={save}
-              className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700"
-              disabled={target==="bookings" && allocateRemain < 0}
-            >
+            <Button onClick={save} className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700" disabled={target==="bookings" && allocateRemain < 0}>
               Сохранить
             </Button>
           </div>
@@ -638,12 +519,4 @@ export default function TxModal({
       </div>
     </div>
   );
-}
-
-/** clamp [0..total] */
-function clamp01n(x: number, total: number) {
-  if (!Number.isFinite(x)) return 0;
-  if (x < 0) return 0;
-  if (x > total) return total;
-  return x;
 }

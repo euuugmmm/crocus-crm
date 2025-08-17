@@ -14,6 +14,7 @@ import {
   orderBy,
   query,
   where,
+  getDocs,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
@@ -31,6 +32,7 @@ import {
   Allocation,
 } from "@/types/finance";
 import { CheckCircle2, AlertTriangle, XCircle, Users2, User } from "lucide-react";
+import { canViewFinance } from "@/lib/finance/roles";
 
 /** ===== Helpers for bookings formatting ===== */
 type BookingFull = {
@@ -116,11 +118,27 @@ const pickCheckOut = (b: BookingFull) => first(
 const bookingBrutto = (b: BookingFull) => toNum(b.clientPrice ?? b.bruttoClient ?? 0);
 const bookingInternal = (b: BookingFull) => toNum(b.internalNet ?? b.internalNetto ?? b.nettoOlimpya ?? b.nettoOperator ?? 0);
 
+/** utils: ISO YYYY-MM-DD (локально) */
+function localISO(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function addDays(d: Date, n: number) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+
+const todayISO = localISO(new Date());
+const defaultFromISO = localISO(addDays(new Date(), -90)); // последние 90 дней
+
 /** ===== Page ===== */
 export default function FinanceTransactions() {
   const router = useRouter();
   const { user, isManager, isSuperManager, isAdmin } = useAuth();
-  const canEdit = isManager || isSuperManager || isAdmin;
+const canView = canViewFinance(
+  { isManager, isSuperManager, isAdmin },
+  { includeManager: true } // пока пускаем менеджеров
+);
+  const canEdit = canView;
 
   // data
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -130,11 +148,12 @@ export default function FinanceTransactions() {
   const [rowsRaw, setRowsRaw] = useState<any[]>([]);
   const [bookingsAll, setBookingsAll] = useState<BookingFull[]>([]);
   const [orders, setOrders] = useState<OrderDoc[]>([]);
+  const [bookingsLoaded, setBookingsLoaded] = useState(false);
 
   // UI: filters / modal / highlight
   const [f, setF] = useState({
-    dateFrom: "",
-    dateTo: "",
+    dateFrom: defaultFromISO,
+    dateTo: todayISO,
     accountId: "all",
     side: "all",
     search: "",
@@ -146,9 +165,15 @@ export default function FinanceTransactions() {
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
+  /** доступы */
   useEffect(() => {
     if (!user) { router.replace("/login"); return; }
-    if (!canEdit) { router.replace("/agent/bookings"); return; }
+    if (!canView) { router.replace("/agent/bookings"); return; }
+  }, [user, canView, router]);
+
+  /** подписки (с узким диапазоном дат) */
+  useEffect(() => {
+    if (!user || !canView) return;
 
     const ua = onSnapshot(
       query(collection(db, "finance_accounts"), orderBy("name", "asc")),
@@ -178,48 +203,70 @@ export default function FinanceTransactions() {
       (err) => console.error("[fxRates] onSnapshot error:", err)
     );
 
+    const from = f.dateFrom || defaultFromISO;
+    const to = f.dateTo || todayISO;
+
+    // транзакции: только диапазон дат
     const ut = onSnapshot(
-      query(collection(db, "finance_transactions"), orderBy("date", "desc")),
+      query(
+        collection(db, "finance_transactions"),
+        where("date", ">=", from),
+        where("date", "<=", to),
+        orderBy("date", "desc")
+      ),
       (s) => setRowsRaw(s.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))),
       (err) => console.error("[transactions] onSnapshot error:", err)
     );
 
-    const ub = onSnapshot(
-      collection(db, "bookings"),
-      (s) => {
-        const all = s.docs.map(d => ({ id: d.id, ...(d.data() as any) } as BookingFull));
+    // ордера: только posted и только диапазон дат
+    const uo = onSnapshot(
+      query(
+        collection(db, "finance_orders"),
+        where("status", "==", "posted"),
+        where("date", ">=", from),
+        where("date", "<=", to),
+        orderBy("date", "desc")
+      ),
+      (s) =>
+        setOrders(
+          s.docs.map((d) => {
+            const v = d.data() as any;
+            return {
+              id: d.id,
+              txId: String(v.txId),
+              date: String(v.date),
+              side: v.side,
+              bookingId: String(v.bookingId),
+              baseAmount: Number(v.baseAmount || 0),
+              status: v.status,
+            } as OrderDoc;
+          })
+        ),
+      (err) => console.error("[orders] onSnapshot error:", err)
+    );
+
+    return () => { ua(); uc(); up(); uf(); ut(); uo(); };
+  }, [user, canView, f.dateFrom, f.dateTo]);
+
+  /** лениво подтягиваем bookings только при открытии модалки (разово) */
+  useEffect(() => {
+    if (!modalOpen || bookingsLoaded) return;
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "bookings"));
+        const all = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) } as BookingFull));
         all.sort((a, b) => {
           const ax = (a as any).createdAt?.toMillis?.() ?? 0;
           const bx = (b as any).createdAt?.toMillis?.() ?? 0;
           return bx - ax;
         });
         setBookingsAll(all);
-      },
-      (err) => console.error("[bookings] onSnapshot error:", err)
-    );
-
-    const uo = onSnapshot(
-      // ордера — источник факта, фильтруем только «posted»
-      query(collection(db, "finance_orders"), where("status", "==", "posted")),
-      (s) => setOrders(
-        s.docs.map(d => {
-          const v = d.data() as any;
-          return {
-            id: d.id,
-            txId: String(v.txId),
-            date: String(v.date),
-            side: v.side,
-            bookingId: String(v.bookingId),
-            baseAmount: Number(v.baseAmount || 0),
-            status: v.status,
-          } as OrderDoc;
-        })
-      ),
-      (err) => console.error("[orders] onSnapshot error:", err)
-    );
-
-    return () => { ua(); uc(); up(); uf(); ut(); ub(); uo(); };
-  }, [user, canEdit, router]);
+        setBookingsLoaded(true);
+      } catch (e) {
+        console.error("[bookings] getDocs error:", e);
+      }
+    })();
+  }, [modalOpen, bookingsLoaded]);
 
   /** нормализованные транзакции */
   const txs: TxRow[] = useMemo(
@@ -526,9 +573,11 @@ export default function FinanceTransactions() {
             <Button variant="outline" onClick={() => router.push("/finance/import/mt940")} className="h-9 px-3">
               Импорт MT940
             </Button>
-            <Button onClick={openCreate} className="bg-green-600 hover:bg-green-700 text-white h-9 px-3">
-              + Транзакция
-            </Button>
+            {canEdit && (
+              <Button onClick={openCreate} className="bg-green-600 hover:bg-green-700 text-white h-9 px-3">
+                + Транзакция
+              </Button>
+            )}
           </div>
         </div>
 
@@ -660,8 +709,12 @@ export default function FinanceTransactions() {
                     </td>
                     <td className="border px-2 py-1">
                       <div className="inline-flex gap-2">
-                        <button className="h-7 px-2 border rounded hover:bg-gray-100" onClick={() => openEdit(t)} title="Редактировать">✏️</button>
-                        <button className="h-7 px-2 border rounded hover:bg-red-50" onClick={() => removeTx(t)} title="Удалить">🗑️</button>
+                        {canEdit && (
+                          <>
+                            <button className="h-7 px-2 border rounded hover:bg-gray-100" onClick={() => openEdit(t)} title="Редактировать">✏️</button>
+                            <button className="h-7 px-2 border rounded hover:bg-red-50" onClick={() => removeTx(t)} title="Удалить">🗑️</button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

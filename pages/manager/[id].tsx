@@ -73,16 +73,6 @@ export default function EditBookingPage() {
     })();
   }, [id, isManager, isSupermanager, isAdmin]);
 
-<BookingFinancePanel
-  bookingId={booking.id}
-  booking={{
-    bruttoClient: booking.bruttoClient,
-    internalNet: booking.internalNet,
-    agentCommission: booking.agentCommission, // если есть
-    createdAt: booking.createdAt,
-    checkIn: booking.checkIn,
-  }}
-/>
   // Загрузка комментариев
   useEffect(() => {
     (async () => {
@@ -104,6 +94,11 @@ export default function EditBookingPage() {
   }, [id]);
 
   // Сохранение изменений брони — остаёмся на этой странице
+  const num = (v: any, d = undefined as number | undefined) =>
+    Number.isFinite(Number(v)) ? Number(v) : d;
+  const clean = (o: any) =>
+    Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+
   const saveBooking = async (data: any) => {
     if (!id) return;
 
@@ -111,11 +106,31 @@ export default function EditBookingPage() {
     const oldSnap = await getDoc(ref);
     const oldData = oldSnap.data() as any;
 
-    await updateDoc(ref, {
+    // Уважаем ручной режим: если в форме флаг не пришёл — берём старое значение
+    const financeManualOverride =
+      data.financeManualOverride ?? oldData?.financeManualOverride ?? false;
+
+    // Никаких пересчётов — сохраняем ровно те значения, что пришли
+    const payload = clean({
       ...data,
-      commissionPaid: data.commissionPaid ?? false,
+      financeManualOverride,
+
+      // финансовые поля приводим к числам, но не пересчитываем
+      bruttoClient: num(data.bruttoClient, oldData?.bruttoClient),
+      internalNet: num(data.internalNet, oldData?.internalNet),
+
+      commissionO:       num(data.commissionO,       oldData?.commissionO),
+      overCommission:    num(data.overCommission,    oldData?.overCommission),
+      realCommission:    num(data.realCommission,    oldData?.realCommission),
+      commissionIgor:    num(data.commissionIgor,    oldData?.commissionIgor),
+      commissionEvgeniy: num(data.commissionEvgeniy, oldData?.commissionEvgeniy),
+      commission:        num(data.commission,        oldData?.commission),
+
+      commissionPaid: data?.commissionPaid ?? false,
       updatedAt: Timestamp.now(),
     });
+
+    await updateDoc(ref, payload);
 
     // уведомление агенту о смене статуса
     if (oldData?.agentStatus !== data.agentStatus) {
@@ -135,13 +150,9 @@ export default function EditBookingPage() {
     }
 
     // обновим локально, чтобы форма увидела свежие данные
-    setBooking((prev: any) => ({ ...(prev || {}), ...data, updatedAt: new Date() }));
+    setBooking((prev: any) => ({ ...(prev || {}), ...payload, updatedAt: new Date() }));
 
     alert("Сохранено");
-    // НИКУДА не уходим — остаёмся на текущей странице редактирования
-    // Если нужно принудительно перечитать из Firestore:
-    // const fresh = await getDoc(ref);
-    // if (fresh.exists()) setBooking({ id: fresh.id, ...fresh.data() });
   };
 
   // Отправка нового комментария
@@ -206,7 +217,7 @@ export default function EditBookingPage() {
         <title>CROCUS CRM – {booking.bookingNumber}</title>
       </Head>
 
-    <ManagerLayout fullWidthHeader fullWidthMain>
+      <ManagerLayout fullWidthHeader fullWidthMain>
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
           <h1 className="text-2xl font-bold">Редактировать заявку: {booking.bookingNumber}</h1>
 
@@ -215,6 +226,18 @@ export default function EditBookingPage() {
             onSubmit={saveBooking}
             agentName={booking.agentName}
             agentAgency={booking.agentAgency}
+          />
+
+          {/* Финансовая панель (если нужна) */}
+          <BookingFinancePanel
+            bookingId={booking.id}
+            booking={{
+              bruttoClient: booking.bruttoClient,
+              internalNet: booking.internalNet,
+              agentCommission: booking.agentCommission,
+              createdAt: booking.createdAt,
+              checkIn: booking.checkIn,
+            }}
           />
 
           <UploadVouchers

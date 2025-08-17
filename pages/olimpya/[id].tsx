@@ -45,8 +45,6 @@ export default function EditOlimpyaBookingPage() {
   const { id } = router.query as { id?: string };
   const { user, loading, isOlimpya, isManager, isSuperManager, isAdmin } = useAuth();
 
-  // ВАЖНО: чтобы не было mismatch между сервером и клиентом,
-  // на сервере и в первый клиентский рендер используем один и тот же Layout.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const isPrivileged = !!(isManager || isSuperManager || isAdmin);
@@ -111,6 +109,8 @@ export default function EditOlimpyaBookingPage() {
           comment: d.comment,
           agentName: d.agentName,
           agentAgency: d.agentAgency,
+          // >>> ВАЖНО: тянем флаг из базы, иначе форма решит, что он false и пересчитает суммы
+          financeManualOverride: d.financeManualOverride ?? false,
         });
       }
       setLoadingData(false);
@@ -144,6 +144,7 @@ export default function EditOlimpyaBookingPage() {
     const oldSnap = await getDoc(ref);
     const old = oldSnap.data() as any;
 
+    // financeManualOverride уходит вместе с остальными значениями
     await updateDoc(ref, {
       ...values,
       updatedAt: Timestamp.now(),
@@ -214,8 +215,6 @@ export default function EditOlimpyaBookingPage() {
   };
 
   return (
-    // Подавляем возможные расхождения текста внутри лейаута (бренд/хедер),
-    // пока не смонтируемся и не определим точный Layout.
     <div suppressHydrationWarning>
       <Head>
         <title>{booking ? `Редактировать №${booking.bookingNumber}` : "Загрузка…"}</title>
@@ -239,7 +238,10 @@ export default function EditOlimpyaBookingPage() {
                 agentAgency={booking.agentAgency}
               />
 
-              <UploadScreenshots bookingDocId={(id as string) || ""} bookingNumber={booking.bookingNumber!} />
+              <UploadScreenshots
+                bookingDocId={(id as string) || ""}
+                bookingNumber={booking.bookingNumber!}
+              />
 
               <div className="space-y-4 mt-6">
                 <h2 className="text-lg font-semibold">Чат комментариев</h2>
@@ -247,7 +249,9 @@ export default function EditOlimpyaBookingPage() {
                   <div key={c.id} className="p-3 border rounded">
                     <p className="text-sm text-gray-600">
                       <strong>{c.authorName}</strong>{" "}
-                      <span className="text-gray-500">{format(c.createdAt, "dd.MM.yyyy HH:mm")}</span>
+                      <span className="text-gray-500">
+                        {format(c.createdAt, "dd.MM.yyyy HH:mm")}
+                      </span>
                     </p>
                     <p className="mt-1">{c.text}</p>
                   </div>
@@ -260,7 +264,11 @@ export default function EditOlimpyaBookingPage() {
                   value={newComment}
                   onChange={(e) => setNewComment(e.target.value)}
                 />
-                <Button onClick={handleSend} variant="default" disabled={sending || !newComment.trim()}>
+                <Button
+                  onClick={handleSend}
+                  variant="default"
+                  disabled={sending || !newComment.trim()}
+                >
                   {sending ? "Отправка…" : "Отправить"}
                 </Button>
               </div>

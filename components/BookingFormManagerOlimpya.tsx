@@ -1,3 +1,4 @@
+// components/BookingFormManagerOlimpya.tsx
 "use client";
 
 import { useState, useEffect, FormEvent } from "react";
@@ -36,17 +37,22 @@ export interface OlimpyaBookingValues {
   internalNet?: number;
   paymentMethod?: string;
   status?: string;
+
   commissionO?: number;
   overCommission?: number;
   realCommission?: number;
   commissionIgor?: number;
   commissionEvgeniy?: number;
   commission?: number;
+
   supplierBookingNumber?: string;
   payerName?: string;
   comment?: string;
   agentName?: string;
   agentAgency?: string;
+
+  /** Флаг ручного режима — если true, ничего не пересчитываем. */
+  financeManualOverride?: boolean;
 }
 
 interface Props {
@@ -114,14 +120,7 @@ export default function BookingFormManagerOlimpya({
   const [comment, setComment] = useState("");
 
   const [tourists, setTourists] = useState<Tourist[]>([
-    {
-      name: "",
-      dob: "",
-      passportNumber: "",
-      passportValidUntil: "",
-      nationality: "",
-      hasEUDoc: false,
-    },
+    { name: "", dob: "", passportNumber: "", passportValidUntil: "", nationality: "", hasEUDoc: false },
   ]);
 
   const [supplierBookingNumber, setSupplierBookingNumber] = useState("");
@@ -129,6 +128,7 @@ export default function BookingFormManagerOlimpya({
   const [payerMode, setPayerMode] = useState<PayerMode>("agent");
   const [customPayerName, setCustomPayerName] = useState("");
 
+  // --- Финансовые поля ---
   const [commissionO, setCommissionO] = useState(0);
   const [overCommission, setOverCommission] = useState(0);
   const [realCommission, setRealCommission] = useState(0);
@@ -136,6 +136,11 @@ export default function BookingFormManagerOlimpya({
   const [commissionEvgeniy, setCommissionEvgeniy] = useState(0);
   const [commission, setCommission] = useState(0);
 
+  // Ручной режим + «касался ли пользователь сумм»
+  const [financeManual, setFinanceManual] = useState<boolean>(false);
+  const [manualTouched, setManualTouched] = useState<boolean>(false);
+
+  // Подтягиваем initialValues
   useEffect(() => {
     if (!initialValues) return;
     setBase(initialValues.baseType || "igor");
@@ -159,18 +164,8 @@ export default function BookingFormManagerOlimpya({
     setTourists(
       Array.isArray(initialValues.tourists) && initialValues.tourists.length
         ? initialValues.tourists
-        : [
-            {
-              name: "",
-              dob: "",
-              passportNumber: "",
-              passportValidUntil: "",
-              nationality: "",
-              hasEUDoc: false,
-            },
-          ]
+        : [{ name: "", dob: "", passportNumber: "", passportValidUntil: "", nationality: "", hasEUDoc: false }]
     );
-
     setSupplierBookingNumber(initialValues.supplierBookingNumber || "");
 
     // payerName -> режим
@@ -180,27 +175,28 @@ export default function BookingFormManagerOlimpya({
         ? initialValues.tourists[0].name
         : "";
     if (pv) {
-      if (pv === (agentName || "")) {
-        setPayerMode("agent");
-        setCustomPayerName("");
-      } else if (firstTouristName && pv === firstTouristName) {
-        setPayerMode("first");
-        setCustomPayerName("");
-      } else {
-        setPayerMode("custom");
-        setCustomPayerName(pv);
-      }
-    } else {
-      setPayerMode("first");
-      setCustomPayerName("");
-    }
+      if (pv === (agentName || "")) { setPayerMode("agent"); setCustomPayerName(""); }
+      else if (firstTouristName && pv === firstTouristName) { setPayerMode("first"); setCustomPayerName(""); }
+      else { setPayerMode("custom"); setCustomPayerName(pv); }
+    } else { setPayerMode("first"); setCustomPayerName(""); }
 
-    if (typeof initialValues.commission === "number") {
-      setCommission(initialValues.commission);
-    }
+    // Финансы из initialValues (без пересчёта)
+    if (typeof initialValues.commissionO === "number") setCommissionO(initialValues.commissionO);
+    if (typeof initialValues.overCommission === "number") setOverCommission(initialValues.overCommission);
+    if (typeof initialValues.realCommission === "number") setRealCommission(initialValues.realCommission);
+    if (typeof initialValues.commissionIgor === "number") setCommissionIgor(initialValues.commissionIgor);
+    if (typeof initialValues.commissionEvgeniy === "number") setCommissionEvgeniy(initialValues.commissionEvgeniy);
+    if (typeof initialValues.commission === "number") setCommission(initialValues.commission);
+
+    // ВАЖНО: читаем флаг из БД и не сбрасываем его нигде автоматически
+    setFinanceManual(!!initialValues.financeManualOverride);
+    setManualTouched(false);
   }, [initialValues, agentName]);
 
+  // Автопересчёт — только если НЕТ ручного режима и пользователь ещё не правил суммы
   useEffect(() => {
+    if (financeManual || manualTouched) return;
+
     const bc = parseFloat(bruttoClient) || 0;
     const no = parseFloat(nettoOlimpya) || 0;
     const nf = parseFloat(internalNet) || 0;
@@ -230,7 +226,7 @@ export default function BookingFormManagerOlimpya({
     setCommissionIgor(rnd(ig));
     setCommissionEvgeniy(rnd(ev));
     setCommission(rnd(realR * 0.9));
-  }, [bruttoClient, nettoOlimpya, internalNet, base]);
+  }, [bruttoClient, nettoOlimpya, internalNet, base, financeManual, manualTouched]);
 
   const parseDMYLocal = (s: string) => {
     const p = parse(s, "dd.MM.yyyy", new Date());
@@ -259,18 +255,7 @@ export default function BookingFormManagerOlimpya({
   );
 
   const addTourist = () =>
-    setTourists((t) => [
-      ...t,
-      {
-        name: "",
-        dob: "",
-        passportNumber: "",
-        passportValidUntil: "",
-        nationality: "",
-        hasEUDoc: false,
-        phone: "",
-      },
-    ]);
+    setTourists((t) => [...t, { name: "", dob: "", passportNumber: "", passportValidUntil: "", nationality: "", hasEUDoc: false, phone: "" }]);
   const delTourist = (idx: number) => setTourists((t) => t.filter((_, i) => i !== idx));
   const chTourist = (idx: number, f: keyof Tourist, v: any) =>
     setTourists((t) => t.map((tr, i) => (i === idx ? { ...tr, [f]: v } : tr)));
@@ -279,6 +264,11 @@ export default function BookingFormManagerOlimpya({
     if (payerMode === "agent") return agentName || "";
     if (payerMode === "first") return tourists[0]?.name || "";
     return customPayerName;
+  };
+
+  // Помечаем, что вручную меняли суммы (блокирует автопересчёт в эту сессию)
+  const markManual = () => {
+    setManualTouched(true);
   };
 
   function handleSubmit(e: FormEvent) {
@@ -304,19 +294,28 @@ export default function BookingFormManagerOlimpya({
       internalNet: parseFloat(internalNet) || 0,
       paymentMethod,
       status,
+
+      // Сохраняем РОВНО введённые цифры:
       commissionO,
       overCommission,
       realCommission,
       commissionIgor,
       commissionEvgeniy,
       commission,
+
       supplierBookingNumber,
       payerName: resolvedPayerName(),
       comment,
       agentName,
       agentAgency,
+
+      // Сохраняем флаг — больше нигде его не сбрасываем автоматически
+      financeManualOverride: financeManual,
     });
   }
+
+  // Редактировать суммы можно только при «Агент» и включённом флаге
+  const manualMode = payerMode === "agent" && financeManual;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 rounded-lg shadow">
@@ -342,125 +341,71 @@ export default function BookingFormManagerOlimpya({
           <div className="col-span-full overflow-x-auto">
             <strong>Туристы:</strong>
             <div className="mt-2 grid gap-4 whitespace-nowrap grid-cols-[minmax(250px,_auto)_max-content_max-content_max-content_max-content_max-content_max-content]">
-              <div>
-                <p className="sr-only">ФИО</p>
-                {tourists.map((t, i) => <p key={i}>{t.name}</p>)}
-              </div>
-              <div>
-                <p className="sr-only">Возраст</p>
-                {tourists.map((t, i) => <p key={i}>{age(t.dob)}</p>)}
-              </div>
-              <div>
-                <p className="sr-only">Дата рождения</p>
-                {tourists.map((t, i) => <p key={i}>{fmt(t.dob)}</p>)}
-              </div>
-              <div>
-                <p className="sr-only">Гражданство</p>
-                {tourists.map((t, i) => <p key={i}>{t.nationality}</p>)}
-              </div>
-              <div>
-                <p className="sr-only">Паспорт №</p>
-                {tourists.map((t, i) => <p key={i}>{t.passportNumber}</p>)}
-              </div>
-              <div>
-                <p className="sr-only">Действителен до</p>
-                {tourists.map((t, i) => <p key={i}>{fmt(t.passportValidUntil)}</p>)}
-              </div>
+              <div>{tourists.map((t, i) => <p key={i}>{t.name}</p>)}</div>
+              <div>{tourists.map((t, i) => <p key={i}>{age(t.dob)}</p>)}</div>
+              <div>{tourists.map((t, i) => <p key={i}>{fmt(t.dob)}</p>)}</div>
+              <div>{tourists.map((t, i) => <p key={i}>{t.nationality}</p>)}</div>
+              <div>{tourists.map((t, i) => <p key={i}>{t.passportNumber}</p>)}</div>
+              <div>{tourists.map((t, i) => <p key={i}>{fmt(t.passportValidUntil)}</p>)}</div>
             </div>
           </div>
         </div>
       </div>
 
+      {/* База клиента */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">База клиента</label>
-          <select
-            className="w-full border rounded p-2"
-            value={base}
-            onChange={(e) => setBase(e.target.value as any)}
-            required
-          >
-            {BASES.map((b) => (
-              <option key={b.val} value={b.val}>{b.label}</option>
-            ))}
+          <select className="w-full border rounded p-2" value={base} onChange={(e) => setBase(e.target.value as any)} required>
+            {BASES.map((b) => (<option key={b.val} value={b.val}>{b.label}</option>))}
           </select>
         </div>
       </div>
 
+      {/* Оператор и номер */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Оператор</label>
-          <select
-            className="w-full border rounded p-2"
-            value={operator}
-            onChange={(e) => setOperator(e.target.value)}
-            required
-          >
+          <select className="w-full border rounded p-2" value={operator} onChange={(e) => setOperator(e.target.value)} required>
             <option value="">— выберите —</option>
-            {OPERATORS.map((o) => (
-              <option key={o.val} value={o.val}>{o.label}</option>
-            ))}
+            {OPERATORS.map((o) => (<option key={o.val} value={o.val}>{o.label}</option>))}
           </select>
         </div>
         <div className="md:col-span-1">
           <label className="block font-medium">Номер у оператора/поставщика</label>
-          <input
-            className="w-full border rounded p-2"
-            value={supplierBookingNumber}
-            onChange={(e) => setSupplierBookingNumber(e.target.value)}
-            placeholder="например, TOCO-123456"
-          />
+          <input className="w-full border rounded p-2" value={supplierBookingNumber} onChange={(e) => setSupplierBookingNumber(e.target.value)} placeholder="например, TOCO-123456" />
         </div>
       </div>
 
+      {/* Маршрут и отель */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Направление</label>
-          <input
-            className="w-full border rounded p-2"
-            value={region}
-            onChange={(e) => setRegion(e.target.value)}
-            required
-          />
+          <input className="w-full border rounded p-2" value={region} onChange={(e) => setRegion(e.target.value)} required />
         </div>
         <div>
           <label className="block font-medium">Отель</label>
-          <input
-            className="w-full border rounded p-2"
-            value={hotel}
-            onChange={(e) => setHotel(e.target.value)}
-            required
-          />
+          <input className="w-full border rounded p-2" value={hotel} onChange={(e) => setHotel(e.target.value)} required />
         </div>
       </div>
 
+      {/* Перелёт */}
       <div className="grid grid-cols-3 gap-4">
         <div>
           <label className="block font-medium">Город вылета</label>
-          <input
-            className="w-full border rounded p-2"
-            value={departureCity}
-            onChange={(e) => setDepartureCity(e.target.value)}
-          />
+          <input className="w-full border rounded p-2" value={departureCity} onChange={(e) => setDepartureCity(e.target.value)} />
         </div>
         <div>
           <label className="block font-medium">Город прилёта</label>
-          <input
-            className="w-full border rounded p-2"
-            value={arrivalCity}
-            onChange={(e) => setArrivalCity(e.target.value)}
-          />
+          <input className="w-full border rounded p-2" value={arrivalCity} onChange={(e) => setArrivalCity(e.target.value)} />
         </div>
         <div>
           <label className="block font-medium">Номер рейса</label>
-          <input
-            className="w-full border rounded p-2"
-            value={flightNumber}
-            onChange={(e) => setFlightNumber(e.target.value)}
-          />
+          <input className="w-full border rounded p-2" value={flightNumber} onChange={(e) => setFlightNumber(e.target.value)} />
         </div>
       </div>
 
+      {/* Даты */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Заезд</label>
@@ -472,191 +417,153 @@ export default function BookingFormManagerOlimpya({
         </div>
       </div>
 
+      {/* Туристы */}
       <h3 className="text-lg font-semibold">Туристы</h3>
       {tourists.map((t, i) => (
         <div key={i} className="relative border p-4 rounded-lg bg-white mb-4 shadow-sm">
           {tourists.length > 1 && (
-            <button
-              type="button"
-              onClick={() => delTourist(i)}
-              className="absolute top-2 right-2 text-red-500"
-            >
-              🗑
-            </button>
+            <button type="button" onClick={() => delTourist(i)} className="absolute top-2 right-2 text-red-500">🗑</button>
           )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <input
-              placeholder="ФИО"
-              required
-              value={t.name}
-              onChange={(e) => chTourist(i, "name", e.target.value)}
-              className="border rounded p-2"
-            />
+            <input placeholder="ФИО" required value={t.name} onChange={(e) => chTourist(i, "name", e.target.value)} className="border rounded p-2" />
             {renderMaskedInput(t.dob, (v) => chTourist(i, "dob", v))}
-            <input
-              placeholder="Паспорт №"
-              value={t.passportNumber}
-              onChange={(e) => chTourist(i, "passportNumber", e.target.value)}
-              className="border rounded p-2"
-            />
-            {renderMaskedInput(t.passportValidUntil, (v) =>
-              chTourist(i, "passportValidUntil", v)
-            )}
-            <input
-              placeholder="Гражданство"
-              value={t.nationality}
-              onChange={(e) => chTourist(i, "nationality", e.target.value)}
-              className="border rounded p-2"
-            />
+            <input placeholder="Паспорт №" value={t.passportNumber} onChange={(e) => chTourist(i, "passportNumber", e.target.value)} className="border rounded p-2" />
+            {renderMaskedInput(t.passportValidUntil, (v) => chTourist(i, "passportValidUntil", v))}
+            <input placeholder="Гражданство" value={t.nationality} onChange={(e) => chTourist(i, "nationality", e.target.value)} className="border rounded p-2" />
             <label className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                checked={t.hasEUDoc}
-                onChange={(e) => chTourist(i, "hasEUDoc", e.target.checked)}
-              />
+              <input type="checkbox" checked={t.hasEUDoc} onChange={(e) => chTourist(i, "hasEUDoc", e.target.checked)} />
               <span>EU-документ</span>
             </label>
           </div>
         </div>
       ))}
-      <button type="button" onClick={addTourist} className="text-blue-600 text-sm">
-        + Добавить туриста
-      </button>
+      <button type="button" onClick={addTourist} className="text-blue-600 text-sm">+ Добавить туриста</button>
 
+      {/* Финансы (ввод) */}
       <h3 className="text-lg font-semibold mt-4">Финансовые данные</h3>
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Brutto клиента (€)</label>
-          <input
-            type="number"
-            step="0.01"
-            className="w-full border rounded p-2"
-            value={bruttoClient}
-            onChange={(e) => setBruttoClient(e.target.value)}
-            required
-          />
+          <input type="number" step="0.01" className="w-full border rounded p-2" value={bruttoClient} onChange={(e) => setBruttoClient(e.target.value)} required />
         </div>
         <div>
           <label className="block font-medium">Netto Олимпия (€)</label>
-          <input
-            type="number"
-            step="0.01"
-            className="w-full border rounded p-2"
-            value={nettoOlimpya}
-            onChange={(e) => setNettoOlimpya(e.target.value)}
-          />
+          <input type="number" step="0.01" className="w-full border rounded p-2" value={nettoOlimpya} onChange={(e) => setNettoOlimpya(e.target.value)} />
         </div>
       </div>
       <div>
         <label className="block font-medium">Netto Fact (€)</label>
-        <input
-          type="number"
-          step="0.01"
-          className="w-full border rounded p-2"
-          value={internalNet}
-          onChange={(e) => setinternalNet(e.target.value)}
-        />
+        <input type="number" step="0.01" className="w-full border rounded p-2" value={internalNet} onChange={(e) => setinternalNet(e.target.value)} />
       </div>
 
+      {/* Плательщик + ручной режим */}
       <div className="md:col-span-2">
         <label className="block font-medium">Плательщик</label>
         <div className="flex flex-col gap-2 mt-1">
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="radio"
-              name="payerMode"
-              value="first"
-              checked={payerMode === "first"}
-              onChange={() => setPayerMode("first")}
-            />
+            <input type="radio" name="payerMode" value="first" checked={payerMode === "first"} onChange={() => setPayerMode("first")} />
             <span>Первый турист ({tourists[0]?.name || "—"})</span>
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="radio"
-              name="payerMode"
-              value="agent"
-              checked={payerMode === "agent"}
-              onChange={() => setPayerMode("agent")}
-            />
+            <input type="radio" name="payerMode" value="agent" checked={payerMode === "agent"} onChange={() => setPayerMode("agent")} />
             <span>Агент ({agentName || "—"})</span>
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="radio"
-              name="payerMode"
-              value="custom"
-              checked={payerMode === "custom"}
-              onChange={() => setPayerMode("custom")}
-            />
+            <input type="radio" name="payerMode" value="custom" checked={payerMode === "custom"} onChange={() => setPayerMode("custom")} />
             <span>Другое</span>
           </label>
         </div>
 
         <input
           className="w-full border rounded p-2 mt-2"
-          value={
-            payerMode === "agent"
-              ? agentName || ""
-              : payerMode === "first"
-              ? tourists[0]?.name || ""
-              : customPayerName
-          }
-          onChange={(e) => {
-            if (payerMode === "custom") setCustomPayerName(e.target.value);
-          }}
+          value={payerMode === "agent" ? (agentName || "") : payerMode === "first" ? (tourists[0]?.name || "") : customPayerName}
+          onChange={(e) => { if (payerMode === "custom") setCustomPayerName(e.target.value); }}
           placeholder="Имя плательщика"
           disabled={payerMode !== "custom"}
         />
+
+        {payerMode === "agent" && (
+          <label className="mt-3 inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={financeManual}
+              onChange={(e) => setFinanceManual(e.target.checked)}
+            />
+            <span>Ручное редактирование финансов (агентский платёж)</span>
+          </label>
+        )}
+      </div>
+
+      {/* Комиссии */}
+      <div className="p-3 bg-gray-50 border rounded text-sm space-y-2">
+        <div className="font-medium">Комиссии</div>
+
+        <RowField label="Комиссия Олимпия (O)" value={commissionO} editable={manualMode} onChange={(v) => { markManual(); setCommissionO(v); }} />
+        <RowField label="Оверкомиссия"          value={overCommission} editable={manualMode} onChange={(v) => { markManual(); setOverCommission(v); }} />
+        <RowField label="Комиссия реальная"     value={realCommission} editable={manualMode} onChange={(v) => { markManual(); setRealCommission(v); }} />
+        <RowField label="Игорю"                  value={commissionIgor} editable={manualMode} onChange={(v) => { markManual(); setCommissionIgor(v); }} />
+        <RowField label="Евгению"               value={commissionEvgeniy} editable={manualMode} onChange={(v) => { markManual(); setCommissionEvgeniy(v); }} />
+        <RowField label="Комиссия (после -10%)" value={commission} editable={manualMode} onChange={(v) => { markManual(); setCommission(v); }} />
+
+        {!financeManual && !manualTouched && (
+          <div className="text-xs text-gray-500">
+            Значения рассчитываются автоматически на основе Brutto/Netto и базы. Чтобы изменить суммы вручную,
+            выберите плательщика «Агент» и включите галочку «Ручное редактирование финансов».
+          </div>
+        )}
       </div>
 
       <div>
         <label className="block font-medium">Статус заявки</label>
-        <select
-          className="w-full border rounded p-2"
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-        >
-          {STATUS_OPTIONS.map((s) => (
-            <option key={s.val} value={s.val}>{s.label}</option>
-          ))}
+        <select className="w-full border rounded p-2" value={status} onChange={(e) => setStatus(e.target.value)}>
+          {STATUS_OPTIONS.map((s) => (<option key={s.val} value={s.val}>{s.label}</option>))}
         </select>
-      </div>
-
-      <div className="p-3 bg-gray-50 border rounded text-sm space-y-1">
-        <p><strong>Комиссия Олимпия (O):</strong> {commissionO} €</p>
-        <p><strong>Оверкомиссия:</strong> {overCommission} €</p>
-        <p><strong>Комиссия реальная:</strong> {realCommission} €</p>
-        <p><strong>Игорю:</strong> {commissionIgor} €</p>
-        <p><strong>Евгению:</strong> {commissionEvgeniy} €</p>
-        <p><strong>Комиссия (после -10%):</strong> {commission} €</p>
       </div>
 
       <div>
         <label className="block font-medium">Комментарий при создании</label>
-        <textarea
-          className="w-full border rounded p-2"
-          value={comment}
-          onChange={(e) => setComment(e.target.value)}
-        />
+        <textarea className="w-full border rounded p-2" value={comment} onChange={(e) => setComment(e.target.value)} />
       </div>
 
       <div className="flex justify-between mt-4">
-        <button
-          type="submit"
-          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-        >
+        <button type="submit" className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
           {initialValues ? "Сохранить" : "Создать"}
         </button>
 
-        <button
-          type="button"
-          className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
-          onClick={() => window.history.back()}
-        >
+        <button type="button" className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600" onClick={() => window.history.back()}>
           Отмена
         </button>
       </div>
     </form>
+  );
+}
+
+/** Строка с числовым полем/значением */
+function RowField({
+  label,
+  value,
+  editable,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  editable: boolean;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span>{label}:</span>
+      {editable ? (
+        <input
+          type="number"
+          step="0.01"
+          className="w-40 border rounded p-1 text-right"
+          value={Number.isFinite(value) ? value : 0}
+          onChange={(e) => onChange(parseFloat(e.target.value || "0") || 0)}
+        />
+      ) : (
+        <span>{(Number(value) || 0).toFixed(2)} €</span>
+      )}
+    </div>
   );
 }

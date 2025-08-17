@@ -5,8 +5,10 @@ import Head from "next/head";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
+import { useAuth } from "@/context/AuthContext";
+import { canViewFinance } from "@/lib/finance/roles";
 import { db } from "@/firebaseConfig";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, doc, getDoc, onSnapshot } from "firebase/firestore";
 import {
   ArrowUpRight,
   ArrowDownRight,
@@ -38,53 +40,37 @@ import {
   Area,
 } from "recharts";
 
-/** -------- Types -------- */
-type BookingDoc = {
+/** -------- Types (кэш) -------- */
+type SalesCacheMeta = {
+  lastRunAt?: any;
+  status?: "running" | "done" | "error";
+  range?: { from?: string; to?: string; basis?: "createdAt" | "checkIn" };
+  error?: string;
+  lastDocId?: string;
+};
+type SalesDailyRow = { date: string; gross: number; count: number };
+type FoundersDailyRow = { date: string; igor: number; evg: number };
+type OperatorSalesRow = { operator: string; gross: number; count: number };
+type OperatorFoundersRow = { operator: string; igor: number; evg: number; total: number };
+type SalesCacheDoc = {
   id: string;
-  bookingNumber?: string;
-  operator?: string;
-  agentName?: string;
-  region?: string;
-  hotel?: string;
-
-  createdAt?: any;      // Firestore Timestamp | ISO | Date
-  checkIn?: any;        // "DD.MM.YYYY" | Timestamp | Date
-
-  clientPrice?: number;
-  bruttoClient?: number;
-
-  crocusProfit?: number;
-
-  commissionIgor?: number;
-  commissionEvgeniy?: number;
-
-  bookingType?: string;
-  baseType?: string;
-  status?: string;
+  basis: "createdAt" | "checkIn";
+  from: string;
+  to: string;
+  generatedAt?: any;
+  totals: { sumGross: number; count: number };
+  salesDaily: SalesDailyRow[];
+  foundersDaily: FoundersDailyRow[];
+  operatorSales: OperatorSalesRow[];
+  operatorsFounders: OperatorFoundersRow[];
 };
 
 /** -------- Date helpers -------- */
+const pad2 = (n: number) => String(n).padStart(2, "0");
 const toLocalISODate = (d: Date) => {
+  // local YYYY-MM-DD
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-  return z.toISOString().slice(0, 10); // YYYY-MM-DD
-};
-const parseMaybeTimestamp = (v: any): Date | null => {
-  if (!v) return null;
-  if (v?.toDate) {
-    try { return v.toDate() as Date; } catch {}
-  }
-  if (v instanceof Date) return v;
-  if (typeof v === "string") {
-    const m = v.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-    if (m) {
-      const [, dd, mm, yyyy] = m;
-      const dt = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-      return isNaN(+dt) ? null : dt;
-    }
-    const dt = new Date(v);
-    return isNaN(+dt) ? null : dt;
-  }
-  return null;
+  return z.toISOString().slice(0, 10);
 };
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
@@ -106,38 +92,63 @@ const endOfWeekISO = (d = new Date()) => addDays(endOfDay(startOfWeekISO(d)), 6)
 
 const formatDMY = (d: Date | null | undefined) => {
   if (!d) return "—";
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = pad2(d.getDate());
+  const mm = pad2(d.getMonth() + 1);
   const yyyy = d.getFullYear();
   return `${dd}.${mm}.${yyyy}`;
 };
 
-/** -------- Money/helpers -------- */
-const money = (n: number) =>
-  `${n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
-const toNum = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-const bookingGross = (b: BookingDoc) => toNum(b.clientPrice ?? b.bruttoClient ?? 0);
-
-/** -------- Grouping helpers -------- */
 type Granularity = "day" | "week" | "month";
 type DateBasis = "createdAt" | "checkIn";
 type TabKey = "sales" | "founders" | "operators";
 
-const labelFor = (d: Date, g: Granularity) => {
+/** -------- Money/helpers -------- */
+const money = (n: number) =>
+  `${n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+
+/** -------- Группировка рядов кэша -------- */
+const labelFor = (iso: string, g: Granularity) => {
+  const d = new Date(iso + "T00:00:00");
   if (g === "day") return formatDMY(d);
   if (g === "week") {
-    const tmp = new Date(d);
+    const tmp = d;
     const yearStart = new Date(tmp.getFullYear(), 0, 1);
-    const diff =
-      (startOfWeekISO(tmp).getTime() - startOfWeekISO(yearStart).getTime()) /
-      (1000 * 3600 * 24);
+    const weekStart = startOfWeekISO(tmp);
+    const week0 = startOfWeekISO(yearStart);
+    const diff = (weekStart.getTime() - week0.getTime()) / (1000 * 3600 * 24);
     const week = Math.floor(diff / 7) + 1;
-    return `${tmp.getFullYear()}-W${String(week).padStart(2, "0")}`;
+    return `${tmp.getFullYear()}-W${pad2(week)}`;
   }
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const mm = pad2(d.getMonth() + 1);
   return `${d.getFullYear()}-${mm}`;
 };
-const stepFor = (g: Granularity) => (g === "day" ? 1 : g === "week" ? 7 : 30);
+
+function groupSales(daily: SalesDailyRow[], g: Granularity) {
+  const m = new Map<string, { gross: number; count: number }>();
+  for (const r of daily) {
+    const k = labelFor(r.date, g);
+    if (!m.has(k)) m.set(k, { gross: 0, count: 0 });
+    const v = m.get(k)!;
+    v.gross += r.gross;
+    v.count += r.count;
+  }
+  return Array.from(m.entries())
+    .map(([label, v]) => ({ label, gross: +v.gross.toFixed(2), count: v.count }))
+    .sort((a, b) => (a.label > b.label ? 1 : -1));
+}
+function groupFounders(daily: FoundersDailyRow[], g: Granularity) {
+  const m = new Map<string, { igor: number; evg: number }>();
+  for (const r of daily) {
+    const k = labelFor(r.date, g);
+    if (!m.has(k)) m.set(k, { igor: 0, evg: 0 });
+    const v = m.get(k)!;
+    v.igor += r.igor;
+    v.evg += r.evg;
+  }
+  return Array.from(m.entries())
+    .map(([label, v]) => ({ label, igor: +v.igor.toFixed(2), evg: +v.evg.toFixed(2), total: +(v.igor + v.evg).toFixed(2) }))
+    .sort((a, b) => (a.label > b.label ? 1 : -1));
+}
 
 /** -------- Palette (понятные цвета) -------- */
 const C_IGOR = "#2563eb";       // blue-600
@@ -146,37 +157,31 @@ const C_TOTAL = "#059669";      // emerald-600
 const C_GRID = "#e5e7eb";       // gray-200
 
 export default function SalesDashboard() {
+  const { user, isManager, isSuperManager, isAdmin } = useAuth();
+  const canView = canViewFinance({ isManager, isSuperManager, isAdmin }, { includeManager: true });
+  const canRebuild = !!(isManager || isSuperManager || isAdmin);
+
+  // вкладки и фильтры UI
   const [tab, setTab] = useState<TabKey>("sales");
-  const [allBookings, setAllBookings] = useState<BookingDoc[]>([]);
   const [basis, setBasis] = useState<DateBasis>("createdAt");
   const [gran, setGran] = useState<Granularity>("day");
-
   const [range, setRange] = useState<{ from: Date; to: Date }>(() => {
     const from = startOfMonth();
     const to = endOfMonth();
     return { from, to };
   });
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, "bookings"), (s) => {
-      const list = s.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as BookingDoc[];
-      setAllBookings(list);
-    });
-    return () => unsub();
-  }, []);
+  // кэш + мета
+  const [meta, setMeta] = useState<SalesCacheMeta | null>(null);
+  const [cache, setCache] = useState<SalesCacheDoc | null>(null);
+  const [prevCache, setPrevCache] = useState<SalesCacheDoc | null>(null);
+  const [loadingCache, setLoadingCache] = useState(false);
+  const [isFallback, setIsFallback] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
 
-  const inRange = useMemo(() => {
-    const f = range.from.getTime();
-    const t = range.to.getTime();
-    return allBookings
-      .map((b) => {
-        const date =
-          basis === "createdAt" ? parseMaybeTimestamp(b.createdAt) : parseMaybeTimestamp(b.checkIn);
-        return { ...b, __date: date || null } as BookingDoc & { __date: Date | null };
-      })
-      .filter((b) => b.__date && b.__date.getTime() >= f && b.__date.getTime() <= t);
-  }, [allBookings, range, basis]);
+  const expectedId = `${basis}_${toLocalISODate(range.from)}_${toLocalISODate(range.to)}`;
 
+  // prev-range для дельт
   const prevRange = useMemo(() => {
     const days =
       Math.max(
@@ -189,121 +194,94 @@ export default function SalesDashboard() {
     const from = addDays(to, -(days - 1));
     return { from, to };
   }, [range]);
+  const prevId = `${basis}_${toLocalISODate(prevRange.from)}_${toLocalISODate(prevRange.to)}`;
 
-  const inPrevRange = useMemo(() => {
-    const f = prevRange.from.getTime();
-    const t = prevRange.to.getTime();
-    return allBookings
-      .map((b) => {
-        const date =
-          basis === "createdAt" ? parseMaybeTimestamp(b.createdAt) : parseMaybeTimestamp(b.checkIn);
-        return { ...b, __date: date || null } as BookingDoc & { __date: Date | null };
-      })
-      .filter((b) => b.__date && b.__date.getTime() >= f && b.__date.getTime() <= t);
-  }, [allBookings, prevRange, basis]);
+  // meta
+  useEffect(() => {
+    if (!canView) return;
+    const unsub = onSnapshot(doc(db, "finance_cacheMeta", "salesDashboard"), (s) => {
+      setMeta(s.exists() ? ({ id: s.id, ...(s.data() as any) }) : null);
+    });
+    return () => unsub();
+  }, [canView]);
 
-  /** KPI — продажи */
+  // exact cache doc
+  useEffect(() => {
+    if (!canView) return;
+    setLoadingCache(true);
+    setIsFallback(false);
+    const unsub = onSnapshot(
+      doc(db, "finance_salesDashboardCache", expectedId),
+      (s) => {
+        if (s.exists()) {
+          setCache({ id: expectedId, ...(s.data() as any) });
+        } else {
+          setCache(null);
+        }
+        setLoadingCache(false);
+      },
+      () => setLoadingCache(false)
+    );
+    return () => unsub();
+  }, [canView, expectedId]);
+
+  // prev cache (one-shot)
+  useEffect(() => {
+    if (!canView) return;
+    (async () => {
+      const snap = await getDoc(doc(db, "finance_salesDashboardCache", prevId));
+      setPrevCache(snap.exists() ? ({ id: prevId, ...(snap.data() as any) }) : null);
+    })();
+  }, [canView, prevId]);
+
+  // fallback: если точного нет, но есть meta.lastDocId — подхватываем его
+  useEffect(() => {
+    if (!canView) return;
+    if (cache) return;
+    if (!meta?.lastDocId) return;
+    if (meta.lastDocId === expectedId) return;
+
+    const unsub = onSnapshot(doc(db, "finance_salesDashboardCache", meta.lastDocId), (s) => {
+      if (s.exists() && !cache) {
+        setCache({ id: meta.lastDocId!, ...(s.data() as any) });
+        setIsFallback(true);
+      }
+    });
+    return () => unsub();
+  }, [canView, cache, meta?.lastDocId, expectedId]);
+
+  // KPI из кэша
   const kpi = useMemo(() => {
-    const sum = inRange.reduce((s, b) => s + bookingGross(b), 0);
-    const cnt = inRange.length;
+    const sum = cache?.totals?.sumGross || 0;
+    const cnt = cache?.totals?.count || 0;
     const avg = cnt ? sum / cnt : 0;
 
-    const sumPrev = inPrevRange.reduce((s, b) => s + bookingGross(b), 0);
-    const cntPrev = inPrevRange.length;
+    const prevSum = prevCache?.totals?.sumGross || 0;
+    const prevCnt = prevCache?.totals?.count || 0;
 
-    const deltaSum = sumPrev ? ((sum - sumPrev) / sumPrev) * 100 : sum > 0 ? 100 : 0;
-    const deltaCnt = cntPrev ? ((cnt - cntPrev) / cntPrev) * 100 : cnt > 0 ? 100 : 0;
+    const deltaSum = prevSum ? ((sum - prevSum) / prevSum) * 100 : sum > 0 ? 100 : 0;
+    const deltaCnt = prevCnt ? ((cnt - prevCnt) / prevCnt) * 100 : cnt > 0 ? 100 : 0;
 
     return {
       sum: +sum.toFixed(2),
       cnt,
       avg: +avg.toFixed(2),
-      prev: { sum: +sumPrev.toFixed(2), cnt: cntPrev },
+      prev: { sum: +prevSum.toFixed(2), cnt: prevCnt },
       delta: { sum: +deltaSum.toFixed(1), cnt: +deltaCnt.toFixed(1) },
     };
-  }, [inRange, inPrevRange]);
+  }, [cache, prevCache]);
 
-  /** Серия — продажи */
+  // серии
   const seriesSales = useMemo(() => {
-    const buckets = new Map<string, { date: Date; gross: number; count: number }>();
-    const seed = new Date(startOfDay(range.from));
-    const step = stepFor(gran);
-    for (let d = new Date(seed); d <= range.to; d = addDays(d, step)) {
-      const key = labelFor(d, gran);
-      buckets.set(key, { date: new Date(d), gross: 0, count: 0 });
-    }
-    for (const b of inRange) {
-      const d = (b as any).__date as Date;
-      const key = labelFor(d, gran);
-      if (!buckets.has(key)) buckets.set(key, { date: startOfDay(d), gross: 0, count: 0 });
-      const v = buckets.get(key)!;
-      v.gross += bookingGross(b);
-      v.count += 1;
-    }
-    return Array.from(buckets.entries())
-      .map(([label, v]) => ({ label, gross: +v.gross.toFixed(2), count: v.count }))
-      .sort((a, b) => (a.label > b.label ? 1 : -1));
-  }, [inRange, range, gran]);
+    if (!cache?.salesDaily?.length) return [];
+    return groupSales(cache.salesDaily, gran);
+  }, [cache?.salesDaily, gran]);
 
-  /** ---------- Учредители: KPI ---------- */
-  const foundersKPI = useMemo(() => {
-    const cur = inRange.reduce(
-      (acc, b) => {
-        acc.igor += toNum((b as any).commissionIgor);
-        acc.evg += toNum((b as any).commissionEvgeniy);
-        return acc;
-      },
-      { igor: 0, evg: 0 }
-    );
-    const prev = inPrevRange.reduce(
-      (acc, b) => {
-        acc.igor += toNum((b as any).commissionIgor);
-        acc.evg += toNum((b as any).commissionEvgeniy);
-        return acc;
-      },
-      { igor: 0, evg: 0 }
-    );
-
-    const delta = {
-      igor: prev.igor ? ((cur.igor - prev.igor) / prev.igor) * 100 : cur.igor > 0 ? 100 : 0,
-      evg: prev.evg ? ((cur.evg - prev.evg) / prev.evg) * 100 : cur.evg > 0 ? 100 : 0,
-    };
-
-    return {
-      cur: { igor: +cur.igor.toFixed(2), evg: +cur.evg.toFixed(2) },
-      prev: { igor: +prev.igor.toFixed(2), evg: +prev.evg.toFixed(2) },
-      delta: { igor: +delta.igor.toFixed(1), evg: +delta.evg.toFixed(1) },
-    };
-  }, [inRange, inPrevRange]);
-
-  /** ---------- Учредители: серии по периодам ---------- */
   const foundersSeries = useMemo(() => {
-    const buckets = new Map<string, { date: Date; igor: number; evg: number }>();
-    const seed = new Date(startOfDay(range.from));
-    const step = stepFor(gran);
-    for (let d = new Date(seed); d <= range.to; d = addDays(d, step)) {
-      const key = labelFor(d, gran);
-      buckets.set(key, { date: new Date(d), igor: 0, evg: 0 });
-    }
-    for (const b of inRange) {
-      const d = (b as any).__date as Date;
-      const key = labelFor(d, gran);
-      if (!buckets.has(key)) buckets.set(key, { date: startOfDay(d), igor: 0, evg: 0 });
-      const v = buckets.get(key)!;
-      v.igor += toNum((b as any).commissionIgor);
-      v.evg += toNum((b as any).commissionEvgeniy);
-    }
-    return Array.from(buckets.entries())
-      .map(([label, v]) => ({
-        label,
-        igor: +v.igor.toFixed(2),
-        evg: +v.evg.toFixed(2),
-        total: +(v.igor + v.evg).toFixed(2),
-      }))
-      .sort((a, b) => (a.label > b.label ? 1 : -1));
-  }, [inRange, range, gran]);
+    if (!cache?.foundersDaily?.length) return [];
+    return groupFounders(cache.foundersDaily, gran);
+  }, [cache?.foundersDaily, gran]);
 
-  /** Кумулятив по учредителям */
   const foundersCumulative = useMemo(() => {
     let sIgor = 0, sEvg = 0;
     return foundersSeries.map((r) => {
@@ -313,40 +291,40 @@ export default function SalesDashboard() {
     });
   }, [foundersSeries]);
 
-  /** Разрез по операторам для учредителей */
   const foundersByOperator = useMemo(() => {
-    const m = new Map<string, { igor: number; evg: number; total: number }>();
-    for (const b of inRange) {
-      const op = b.operator || "—";
-      const cur = m.get(op) || { igor: 0, evg: 0, total: 0 };
-      const i = toNum((b as any).commissionIgor);
-      const e = toNum((b as any).commissionEvgeniy);
-      cur.igor += i; cur.evg += e; cur.total += (i + e);
-      m.set(op, cur);
-    }
-    return Array.from(m.entries())
-      .map(([operator, v]) => ({ operator, igor: +v.igor.toFixed(2), evg: +v.evg.toFixed(2), total: +v.total.toFixed(2) }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 15);
-  }, [inRange]);
+    return (cache?.operatorsFounders || []).slice(0, 15);
+  }, [cache?.operatorsFounders]);
 
-  /** Топ операторов (по продажам) */
   const topByOperatorSales = useMemo(() => {
-    const m = new Map<string, { gross: number; count: number }>();
-    for (const b of inRange) {
-      const key = b.operator || "—";
-      const cur = m.get(key) || { gross: 0, count: 0 };
-      cur.gross += bookingGross(b);
-      cur.count += 1;
-      m.set(key, cur);
-    }
-    return Array.from(m.entries())
-      .map(([op, v]) => ({ operator: op, gross: +v.gross.toFixed(2), count: v.count }))
-      .sort((a, b) => b.gross - a.gross)
-      .slice(0, 12);
-  }, [inRange]);
+    return (cache?.operatorSales || []).slice(0, 12);
+  }, [cache?.operatorSales]);
 
-  /** --- UI --- */
+  // rebuild
+  const handleRebuild = async () => {
+    if (!user || !canRebuild) return;
+    try {
+      setRebuilding(true);
+      const token = await user.getIdToken();
+      const q = new URLSearchParams({
+        from: toLocalISODate(range.from),
+        to: toLocalISODate(range.to),
+        basis,
+      });
+      const res = await fetch(`/api/finance/cache/build-salesDashboard?${q.toString()}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || res.statusText);
+      // onSnapshot подхватит созданный снапшот
+    } catch (e: any) {
+      alert(`Ошибка обновления кэша: ${e?.message || e}`);
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
+  // ---- UI ----
   const [foundersView, setFoundersView] = useState<"stack" | "lines" | "cumulative" | "operators" | "table">("stack");
 
   return (
@@ -359,8 +337,51 @@ export default function SalesDashboard() {
           <div>
             <h1 className="text-2xl font-bold">Отчёт по продажам</h1>
             <div className="text-gray-500 text-sm">
-              Диапазон: <b>{formatDMY(range.from)}</b> — <b>{formatDMY(range.to)}</b> · Основа даты:{" "}
-              <b>{basis === "createdAt" ? "создание" : "заезд (check-in)"}</b>
+              {cache ? (
+                <>
+                  Диапазон кэша: <b>{cache.from}</b> — <b>{cache.to}</b> · Основа даты:{" "}
+                  <b>{cache.basis === "checkIn" ? "check-in" : "создание"}</b>
+                  {isFallback && (
+                    <span className="ml-2 text-xs px-2 py-[2px] rounded-full bg-amber-50 text-amber-700 ring-1 ring-amber-600/20">
+                      показан последний доступный снимок
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  Запрошенный диапазон: <b>{toLocalISODate(range.from)}</b> — <b>{toLocalISODate(range.to)}</b> · Основа:{" "}
+                  <b>{basis === "checkIn" ? "check-in" : "создание"}</b>
+                </>
+              )}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Последняя синхронизация:{" "}
+              <b>
+                {meta?.lastRunAt?.toDate?.()
+                  ? meta.lastRunAt.toDate().toLocaleString("ru-RU")
+                  : meta?.lastRunAt
+                  ? new Date(meta.lastRunAt).toLocaleString("ru-RU")
+                  : "—"}
+              </b>
+              {meta?.status && (
+                <span
+                  className={`ml-2 inline-flex items-center gap-1 text-[11px] px-2 py-[2px] rounded-full ${
+                    meta.status === "running"
+                      ? "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20"
+                      : meta.status === "error"
+                      ? "bg-rose-50 text-rose-700 ring-1 ring-rose-600/20"
+                      : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20"
+                  }`}
+                >
+                  {meta.status}
+                </span>
+              )}
+              {meta?.range && (
+                <span className="ml-2 text-gray-400">
+                  [{meta.range.from} — {meta.range.to}; {meta.range.basis}]
+                </span>
+              )}
+              {meta?.error && <div className="text-rose-600 mt-1">Ошибка: {meta.error}</div>}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -405,7 +426,25 @@ export default function SalesDashboard() {
               <option value="month">Месяц</option>
             </select>
           </div>
+
+          {canRebuild && (
+            <button
+              onClick={handleRebuild}
+              disabled={rebuilding}
+              className="ml-auto text-sm px-3 py-1.5 rounded-lg border bg-blue-600 text-white hover:bg-blue-700"
+              title="Пересчитать и сохранить кэш за выбранный диапазон"
+            >
+              {rebuilding ? "Обновляю…" : "Обновить кэш"}
+            </button>
+          )}
         </div>
+
+        {!cache && !loadingCache && (
+          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            Для диапазона {toLocalISODate(range.from)} — {toLocalISODate(range.to)} ({basis}) кэш-снимок не найден.
+            {canRebuild ? " Нажмите «Обновить кэш»." : " Обратитесь к администратору."}
+          </div>
+        )}
       </div>
 
       {/* TABS */}
@@ -424,21 +463,29 @@ export default function SalesDashboard() {
             <KPI
               title="Продажи (брутто)"
               value={money(kpi.sum)}
-              compare={kpi.prev.sum ? `${kpi.delta.sum > 0 ? "+" : ""}${kpi.delta.sum}% к пред. периоду` : "нет данных для сравнения"}
+              compare={
+                kpi.prev.sum
+                  ? `${kpi.delta.sum > 0 ? "+" : ""}${kpi.delta.sum}% к пред. периоду`
+                  : "нет данных для сравнения"
+              }
               trend={kpi.delta.sum}
               icon={<BarChart3 className="w-5 h-5" />}
             />
             <KPI
               title="Количество заявок"
               value={kpi.cnt.toString()}
-              compare={kpi.prev.cnt ? `${kpi.delta.cnt > 0 ? "+" : ""}${kpi.delta.cnt}% к пред. периоду` : "нет данных для сравнения"}
+              compare={
+                kpi.prev.cnt
+                  ? `${kpi.delta.cnt > 0 ? "+" : ""}${kpi.delta.cnt}% к пред. периоду`
+                  : "нет данных для сравнения"
+              }
               trend={kpi.delta.cnt}
               icon={<Gauge className="w-5 h-5" />}
             />
             <KPI
               title="Средний чек"
               value={money(kpi.avg)}
-              compare="среднее в выбранном диапазоне"
+              compare="среднее в выбранном диапазоне (кэш)"
               trend={0}
               icon={<Layers className="w-5 h-5" />}
             />
@@ -484,16 +531,16 @@ export default function SalesDashboard() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <KPI
               title="Игорь — доход (период)"
-              value={money(foundersKPI.cur.igor)}
-              compare={foundersKPI.prev.igor ? `${foundersKPI.delta.igor >= 0 ? "+" : ""}${foundersKPI.delta.igor}% к пред. периоду` : "нет данных для сравнения"}
-              trend={foundersKPI.delta.igor}
+              value={money((foundersSeries as any[]).reduce((s,r)=>s + (r.igor||0), 0))}
+              compare={prevCache ? "сравнение по кэшу пред. периода" : "нет данных для сравнения"}
+              trend={0}
               icon={<Users2 className="w-5 h-5" />}
             />
             <KPI
               title="Евгений — доход (период)"
-              value={money(foundersKPI.cur.evg)}
-              compare={foundersKPI.prev.evg ? `${foundersKPI.delta.evg >= 0 ? "+" : ""}${foundersKPI.delta.evg}% к пред. периоду` : "нет данных для сравнения"}
-              trend={foundersKPI.delta.evg}
+              value={money((foundersSeries as any[]).reduce((s,r)=>s + (r.evg||0), 0))}
+              compare={prevCache ? "сравнение по кэшу пред. периода" : "нет данных для сравнения"}
+              trend={0}
               icon={<Users2 className="w-5 h-5" />}
             />
           </div>
@@ -520,7 +567,7 @@ export default function SalesDashboard() {
                     <Tooltip formatter={(v: any, name: any) => [money(v as number), name]} />
                     <Legend />
                     <Bar dataKey="igor" name="Игорь" stackId="founders" fill={C_IGOR} />
-                    <Bar dataKey="evg" name="Евгений" stackId="founders" fill={C_EVG} />
+                    <Bar dataKey="evg"  name="Евгений" stackId="founders" fill={C_EVG} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -557,8 +604,8 @@ export default function SalesDashboard() {
                     <YAxis />
                     <Tooltip formatter={(v: any, name: any) => [money(v as number), name]} />
                     <Legend />
-                    <Area type="monotone" dataKey="igor"  name="Игорь"   stroke={C_IGOR} fill={C_IGOR+"22"} />
-                    <Area type="monotone" dataKey="evg"   name="Евгений" stroke={C_EVG}  fill={C_EVG+"22"} />
+                    <Area type="monotone" dataKey="igor"  name="Игорь"   stroke={C_IGOR}  fill={C_IGOR+"22"} />
+                    <Area type="monotone" dataKey="evg"   name="Евгений" stroke={C_EVG}   fill={C_EVG+"22"} />
                     <Area type="monotone" dataKey="total" name="Всего"   stroke={C_TOTAL} fill={C_TOTAL+"22"} />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -646,8 +693,8 @@ export default function SalesDashboard() {
                             pathname: "/finance/sales-details",
                             query: {
                               operator: r.operator,
-                              from: toLocalISODate(range.from),
-                              to: toLocalISODate(range.to),
+                              from: cache?.from ?? toLocalISODate(range.from),
+                              to: cache?.to ?? toLocalISODate(range.to),
                               basis,
                             },
                           }}
@@ -672,7 +719,11 @@ export default function SalesDashboard() {
       )}
 
       <div className="px-4 my-8 text-gray-400 text-xs text-center">
-        Диапазон: {formatDMY(range.from)} — {formatDMY(range.to)} · Основа: {basis === "createdAt" ? "создание" : "check-in"}
+        {cache ? (
+          <>Кэш: {cache.from} — {cache.to} · Основа: {cache.basis === "checkIn" ? "check-in" : "создание"}</>
+        ) : (
+          <>Запрошено: {formatDMY(range.from)} — {formatDMY(range.to)} · Основа: {basis === "checkIn" ? "check-in" : "создание"}</>
+        )}
       </div>
     </ManagerLayout>
   );

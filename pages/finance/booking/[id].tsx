@@ -36,8 +36,16 @@ type Booking = {
   createdAt?: any;
 
   agentName?: string;
+  agentAgency?: string;                // ← добавил (для инфоблока)
   operator?: string;
+  region?: string;                     // ← добавил (для инфоблока)
+  departureCity?: string;              // ← добавил
+  arrivalCity?: string;                // ← добавил
+  flightNumber?: string;               // ← добавил
+  flightTime?: string;                 // ← добавил
   hotel?: string;
+  room?: string;                       // ← добавил
+  mealPlan?: string;                   // ← добавил
   payerName?: string;
   checkIn?: any; checkOut?: any;
 
@@ -47,11 +55,13 @@ type Booking = {
   realCommission?: number;
   commission?: number;
   overCommission?: number;
+  supplierBookingNumber?: string;      // ← добавил (для инфоблока)
 
   commissionIgor?: number;
   commissionEvgeniy?: number;
 
   owners?: Array<{ ownerId?: string; name?: string; share?: number }>;
+  tourists?: Array<{ name?: string; dob?: string; nationality?: string; passportNumber?: string; passportValidUntil?: string }>;
 
   backofficePosted?: boolean;
   backofficeEntered?: boolean;
@@ -62,24 +72,20 @@ type TxDoc = {
   bookingId?: string;
   type: "in" | "out";
   status: "planned" | "actual" | "reconciled";
-  dueDate?: string;        // YYYY-MM-DD (для planned)
-  actualDate?: string;     // YYYY-MM-DD (для actual/reconciled)
-  date?: string;           // дублируем для совместимости/календаря
+  dueDate?: string;        // YYYY-MM-DD
+  actualDate?: string;     // YYYY-MM-DD
+  date?: string;           // дублируем
   accountId?: string;
   currency?: Currency;
-  amount?: number;         // в валюте счёта
-  baseAmount?: number;     // в EUR
+  amount?: number;         // валюта счёта
+  baseAmount?: number;     // EUR
   title?: string;
   category?: string;
   note?: string;
   createdAt?: any;
 };
 
-/** ===== ORDERS =====
- * bookingAllocations — распределение суммы ордера по заявкам (в EUR).
- * bookingIds — массив id заявок (array-contains).
- * bookingId — legacy (одна заявка).
- */
+/** ===== ORDERS ===== */
 type OrderAllocation = { bookingId: string; amountBase: number };
 type OrderDoc = {
   id: string;
@@ -282,13 +288,13 @@ export default function FinanceBookingPage() {
         : (o.bookingId ? [{ bookingId: o.bookingId, amountBase: o.baseAmount }] : []);
     return baseList.map((a, i) => ({ ...a, _idx: i })).filter(a => a.bookingId === bookingId);
   };
-const accById = useMemo(() => {
-  const m = new Map<string, Account>();
-  accounts.forEach(a => m.set(a.id, a));
-  return m;
-}, [accounts]);
+  const accById = useMemo(() => {
+    const m = new Map<string, Account>();
+    accounts.forEach(a => m.set(a.id, a));
+    return m;
+  }, [accounts]);
 
-  /** ФАКТ по ордерам (а не по транзакциям!) */
+  /** ФАКТ по ордерам */
   const factByOrders = useMemo(() => {
     let inEUR = 0, outEUR = 0;
     for (const o of orders) {
@@ -301,7 +307,7 @@ const accById = useMemo(() => {
     return { inEUR: +inEUR.toFixed(2), outEUR: +outEUR.toFixed(2) };
   }, [orders, bookingId]);
 
-  // подсветка карточек теперь по ордерам
+  // подсветка карточек
   const payClass = (paid: number, target: number) => {
     if (target <= 0) return "";
     if (paid <= 0.01) return "bg-rose-50 text-rose-800";
@@ -311,7 +317,7 @@ const accById = useMemo(() => {
   const bruttoCls = payClass(factByOrders.inEUR, brutto);
   const netCls = payClass(factByOrders.outEUR, netCrocus);
 
-  // транзакции (для списка; «факт/план» в их статусе — UI-информация, но «оплачено» считаем по ордерам)
+  // транзакции (для списка)
   const planned = txs.filter(t => t.status === "planned");
   const facts = txs.filter(t => t.status === "actual" || t.status === "reconciled");
 
@@ -335,31 +341,32 @@ const accById = useMemo(() => {
     return eurFrom(n(txForm.amount), ccy as Currency);
   }, [txForm.accountId, txForm.amount, accounts, fx]);
 
-  const saveTx = async () => {
-    if (!booking?.id) return;
-    const acc = accounts.find((a) => a.id === txForm.accountId);
-    if (!acc) { alert("Выберите счёт"); return; }
-    const localDate = txForm.date;
+const saveTx = async () => {
+  if (!booking?.id) return;
+  const acc = accounts.find((a) => a.id === txForm.accountId);
+  if (!acc) { alert("Выберите счёт"); return; }
+  const localDate = txForm.date;
 
-    const payload: TxDoc = {
-      bookingId: booking.id,
-      type: txForm.type,
-      status: txForm.status,
-      dueDate: txForm.status === "planned" ? localDate : undefined,
-      actualDate: txForm.status === "actual" ? localDate : undefined,
-      date: localDate,
-      accountId: txForm.accountId,
-      currency: acc.currency,
-      amount: n(txForm.amount),
-      baseAmount: +baseEURForForm.toFixed(2),
-      title: txForm.title?.trim(),
-      category: txForm.category?.trim(),
-      note: txForm.note?.trim(),
-      createdAt: Timestamp.now(),
-    };
-    await addDoc(collection(db, "finance_transactions"), payload as any);
-    setTxModalOpen(false);
+  const payload = {
+    bookingId: booking.id,
+    type: txForm.type,
+    status: txForm.status,
+    date: localDate,
+    ...(txForm.status === "planned" ? { dueDate: localDate } : {}),
+    ...(txForm.status === "actual"  ? { actualDate: localDate } : {}),
+    accountId: txForm.accountId,
+    currency: acc.currency,
+    amount: n(txForm.amount),
+    baseAmount: +baseEURForForm.toFixed(2),
+    title: txForm.title?.trim() || "",
+    category: txForm.category?.trim() || "",
+    note: txForm.note?.trim() || "",
+    createdAt: Timestamp.now(),
   };
+
+  await addDoc(collection(db, "finance_transactions"), payload as any);
+  setTxModalOpen(false);
+};
 
   // редактирование плана (сумма/дата)
   const updatePlanDueDate = async (t: TxDoc, value: string) => {
@@ -473,6 +480,15 @@ const accById = useMemo(() => {
   const factHasIncome = factByOrders.inEUR > 0.01;
   const factHasExpense = factByOrders.outEUR > 0.01;
 
+  // ===== вычисление пути на страницу редактирования =====
+  const editHref = useMemo(() => {
+    if (!bookingId) return "";
+    // olympya vs subagent/manager
+    return (booking?.bookingType === "olimpya_base")
+      ? `/olimpya/${bookingId}`
+      : `/manager/${bookingId}`;
+  }, [booking?.bookingType, bookingId]);
+
   return (
     <ManagerLayout>
       <Head><title>Заявка: финансы</title></Head>
@@ -496,12 +512,59 @@ const accById = useMemo(() => {
                 <input type="checkbox" checked={backoffice} onChange={toggleBackoffice} />
                 Заведено в бэкофис
               </label>
-              <Button variant="outline" onClick={() => router.push("/finance/bookings-finance")} className="h-8 px-3 text-sm">
-                ← К списку
-              </Button>
+
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => router.push("/finance/bookings-finance")} className="h-8 px-3 text-sm">
+                  ← К списку
+                </Button>
+                <Button
+                  onClick={() => { if (editHref) router.push(editHref); }}
+                  className="h-8 px-3 text-sm"
+                >
+                  Редактировать заявку
+                </Button>
+              </div>
             </div>
           </div>
         </div>
+
+        {/* ===== Инфоблок (read-only) из формы Олимпии ===== */}
+        <Card>
+          <CardContent className="p-4 space-y-3">
+            <h2 className="text-lg font-semibold">Информация о заявке</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+              <p><strong>Агент:</strong> {booking?.agentName || "—"}</p>
+              <p><strong>Агентство:</strong> {booking?.agentAgency || "—"}</p>
+              <p><strong>Номер заявки (внутр.):</strong> {booking?.bookingNumber || "—"}</p>
+              <p><strong>Номер у оператора:</strong> {booking?.supplierBookingNumber || "—"}</p>
+              <p><strong>Оператор:</strong> {booking?.operator || "—"}</p>
+              <p><strong>Направление:</strong> {booking?.region || "—"}</p>
+              <p><strong>Город вылета:</strong> {booking?.departureCity || "—"}</p>
+              <p><strong>Город прилёта:</strong> {booking?.arrivalCity || "—"}</p>
+              <p><strong>Отель:</strong> {booking?.hotel || "—"}</p>
+              <p><strong>Период:</strong> {fmtDate(booking?.checkIn)} → {fmtDate(booking?.checkOut)}</p>
+              <p><strong>Комната:</strong> {booking?.room || "—"}</p>
+              <p><strong>Питание:</strong> {booking?.mealPlan || "—"}</p>
+              <p><strong>Brutto клиента:</strong> {fmt2(booking?.bruttoClient)} €</p>
+              <p><strong>Netto Олимпия:</strong> {fmt2(booking?.nettoOlimpya)} €</p>
+              <p><strong>Netto Fact:</strong> {fmt2(booking?.internalNet)} €</p>
+              <p><strong>Плательщик:</strong> {booking?.payerName || "—"}</p>
+
+              <div className="col-span-full">
+                <strong>Туристы:</strong>
+                <div className="mt-1 text-sm">
+                  {Array.isArray(booking?.tourists) && booking?.tourists?.length
+                    ? booking!.tourists!.map((t, i) => (
+                        <div key={i} className="text-gray-800">
+                          {t?.name || "—"}
+                        </div>
+                      ))
+                    : <div className="text-gray-500">—</div>}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Сводка: факт теперь из ОРДЕРОВ */}
         <Card>
@@ -553,7 +616,7 @@ const accById = useMemo(() => {
           </CardContent>
         </Card>
 
-        {/* Движение денег — план/факт (факт оплаченности определяем по ордерам) */}
+        {/* Движение денег — план/факт */}
         <Card>
           <CardContent className="p-4 space-y-4">
             <div className="flex items-center justify-between">
@@ -656,7 +719,7 @@ const accById = useMemo(() => {
                     const isEditingEUR = canEdit && editing.id === t.id && editing.field === "baseAmount";
                     const isEditingAmt = canEdit && editing.id === t.id && editing.field === "amount";
 
-                    // индикатор: есть ли ордер по стороне (для этой заявки)
+                    // индикатор: есть ли ордер по стороне
                     const sideFact = t.type === "in" ? factByOrders.inEUR : factByOrders.outEUR;
                     const hasOrderForSide = sideFact > 0.01;
 
@@ -683,7 +746,7 @@ const accById = useMemo(() => {
                           ) : t.status === "actual" ? "Факт" : "Сверено"}
                         </td>
 
-                        {/* EUR (edit только план) */}
+                        {/* EUR */}
                         <td
                           className="border px-2 py-1 text-right"
                           onDoubleClick={() => canEdit && setEditing({ id: t.id, field: "baseAmount", value: n(t.baseAmount) })}
@@ -704,7 +767,7 @@ const accById = useMemo(() => {
                           )}
                         </td>
 
-                        {/* Дата (edit только план) */}
+                        {/* Дата */}
                         <td className="border px-2 py-1">
                           {t.status === "planned" ? (
                             <input
@@ -718,7 +781,7 @@ const accById = useMemo(() => {
                           )}
                         </td>
 
-                        {/* Счёт / сумма (edit только план) */}
+                        {/* Счёт / сумма */}
                         <td
                           className="border px-2 py-1"
                           onDoubleClick={() => canEdit && setEditing({ id: t.id, field: "amount", value: n(t.amount) })}
