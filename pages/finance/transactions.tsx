@@ -33,7 +33,7 @@ import {
   BookingOption,
   Allocation,
 } from "@/types/finance";
-import { CheckCircle2, AlertTriangle, XCircle, Users2, User } from "lucide-react";
+import { CheckCircle2, AlertTriangle, XCircle, Users2, User, Repeat } from "lucide-react";
 import { canViewFinance } from "@/lib/finance/roles";
 
 /** ===== Helpers for bookings formatting ===== */
@@ -160,7 +160,7 @@ export default function FinanceTransactions() {
     accountId: "all",
     side: "all",
     search: "",
-    alloc: "all" as "all" | "booked_full" | "booked_part" | "founders" | "none",
+    alloc: "all" as "all" | "booked_full" | "booked_part" | "founders" | "none" | "transfer",
   });
   const [modalOpen, setModalOpen] = useState(false);
   const [modalInitial, setModalInitial] = useState<Partial<TxRow> | null>(null);
@@ -323,6 +323,20 @@ export default function FinanceTransactions() {
     return [...txs, ...plannedTxs];
   }, [txs, plannedTxs]);
 
+  /** индекс: raw по id (нужно для признаков перевода и т.п.) */
+  const rawById = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const r of rowsRaw) m.set(r.id, r);
+    return m;
+  }, [rowsRaw]);
+
+  /** индекс: аккаунты по id — для названий счетов при переводах */
+  const accById = useMemo(() => {
+    const m = new Map<string, Account>();
+    for (const a of accounts) m.set(a.id, a);
+    return m;
+  }, [accounts]);
+
   /** точные суммы по учредителям из raw (для бейджа и фильтра) */
   const foundersByTx = useMemo(() => {
     const m = new Map<string, { ig: number; ev: number }>();
@@ -405,7 +419,10 @@ export default function FinanceTransactions() {
   }, [bookingsAll, sumsByBooking]);
 
   /** классификация распределения (для фильтра) */
-  function classifyAlloc(t: TxRow): "booked_full" | "booked_part" | "founders" | "none" {
+  function classifyAlloc(t: TxRow): "booked_full" | "booked_part" | "founders" | "none" | "transfer" {
+    const raw = rawById.get(t.id);
+    if (raw?.transferPairId || raw?.transferLeg) return "transfer";
+
     const agg = ordersByTx.get(t.id) || { sum: 0, count: 0 };
     const bookedSum = Math.round(agg.sum * 100) / 100;
     const total = Math.round((t.baseAmount || 0) * 100) / 100;
@@ -459,18 +476,20 @@ export default function FinanceTransactions() {
         return true;
       })
       .sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [txsAll, f, ordersByTx, foundersByTx]);
+  }, [txsAll, f, ordersByTx, foundersByTx, rawById]);
 
-  /** итоги: считаем только ФАКТ (плановые пропускаем) */
+  /** итоги: считаем только ФАКТ, без плановых и без переводов */
   const totals = useMemo(() => {
     let inc = 0, exp = 0;
     for (const t of displayed) {
       if (t.status === "planned") continue;
+      const raw = rawById.get(t.id);
+      if (raw?.transferPairId || raw?.transferLeg) continue;
       if (t.side === "income") inc += t.baseAmount;
       else exp += t.baseAmount;
     }
     return { income: +inc.toFixed(2), expense: +exp.toFixed(2), net: +(inc - exp).toFixed(2) };
-  }, [displayed]);
+  }, [displayed, rawById]);
 
   /** выделение строки из ?highlight=txId */
   useEffect(() => {
@@ -488,6 +507,7 @@ export default function FinanceTransactions() {
     setModalOpen(true);
   };
   const openEdit = (row: TxRow) => {
+    if (row.status === "planned") return; // план правим на своей странице/модалке
     setModalInitial(row);
     setModalOpen(true);
   };
@@ -495,8 +515,9 @@ export default function FinanceTransactions() {
     router.replace({ pathname: router.pathname, query: { highlight: id } }, undefined, { shallow: true });
   };
 
-  // Удаление: различаем факт и план
+  // Удаление: различаем факт/план и переводы
   const removeTx = async (row: TxRow) => {
+    // Плановая
     if (row.status === "planned") {
       const plannedId = (row as any).plannedId || row.id.replace(/^planned_/, "");
       if (!confirm("Удалить плановую транзакцию?")) return;
@@ -504,6 +525,22 @@ export default function FinanceTransactions() {
       return;
     }
 
+    const raw = rawById.get(row.id);
+
+    // Если перевод — удаляем обе ножки по transferPairId
+    if (raw?.transferPairId) {
+      if (!confirm("Удалить перевод (обе операции)?")) return;
+      const qBoth = query(collection(db, "finance_transactions"), where("transferPairId", "==", raw.transferPairId));
+      const snap = await getDocs(qBoth);
+      const batchIds = snap.docs.map(d => d.id);
+      for (const id of batchIds) {
+        // у переводов ордеров быть не должно, но на всякий — удалим как обычную транзакцию
+        await removeTxWithOrders(id);
+      }
+      return;
+    }
+
+    // Обычная факт-транзакция
     if (!confirm("Удалить транзакцию и её ордера?")) return;
     await removeTxWithOrders(row.id);
   };
@@ -524,6 +561,19 @@ export default function FinanceTransactions() {
     ownerIgorEUR?: number;
     ownerEvgeniyEUR?: number;
   }) {
+    const raw = rawById.get(txId);
+    if (raw?.transferPairId || raw?.transferLeg) {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20"
+          title="Внутренний перевод между счетами"
+        >
+          <Repeat className="h-4 w-4" />
+          <span className="hidden sm:inline">Перевод</span>
+        </span>
+      );
+    }
+
     const r2 = (x: number) => Math.round(x * 100) / 100;
     const agg = ordersByTx.get(txId) || { sum: 0, count: 0, items: [] as Allocation[] };
     const bookedSum = r2(agg.sum);
@@ -613,6 +663,21 @@ export default function FinanceTransactions() {
     );
   }
 
+  /** подпись для колонки «Счёт» — учитываем переводы */
+  function renderAccountCell(t: TxRow) {
+    const raw = rawById.get(t.id);
+    if (raw?.transferPairId || raw?.transferLeg) {
+      const from = raw.fromAccountId ? accById.get(raw.fromAccountId)?.name || raw.fromAccountId : "—";
+      const to   = raw.toAccountId   ? accById.get(raw.toAccountId)?.name   || raw.toAccountId   : "—";
+      return (
+        <span title="Перевод между счетами">
+          {from} &rarr; {to}
+        </span>
+      );
+    }
+    return t.accountName || t.accountId || "—";
+  }
+
   return (
     <ManagerLayout fullWidthHeader fullWidthMain>
       <Head><title>Транзакции — Финансы</title></Head>
@@ -642,7 +707,7 @@ export default function FinanceTransactions() {
         </div>
 
         {/* Фильтры */}
-        <div className="p-3 border rounded-lg grid grid-cols-1 sm:grid-cols-7 gap-2 text-sm">
+        <div className="p-3 border rounded-lg grid grid-cols-1 sm:grid-cols-8 gap-2 text-sm">
           <div>
             <div className="text-xs text-gray-600 mb-1">С даты</div>
             <input type="date" className="w-full border rounded px-2 py-1"
@@ -686,6 +751,7 @@ export default function FinanceTransactions() {
               <option value="booked_part">По заявкам — частично</option>
               <option value="founders">Учредители</option>
               <option value="none">Нет</option>
+              <option value="transfer">Переводы</option>
             </select>
           </div>
 
@@ -736,7 +802,7 @@ export default function FinanceTransactions() {
                         return y && m && d ? `${d}.${m}.${y}` : t.date || "—";
                       })()}
                     </td>
-                    <td className="border px-2 py-1">{t.accountName || t.accountId}</td>
+                    <td className="border px-2 py-1">{renderAccountCell(t)}</td>
                     <td className="border px-2 py-1">
                       {t.side === "income" ? (
                         <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20">Доход</span>

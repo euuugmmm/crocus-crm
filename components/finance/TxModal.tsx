@@ -34,6 +34,14 @@ function Field({ label, children, full }: { label: string; children: React.React
 
 type TargetMode = "bookings" | "founders" | "transfer";
 
+// ───── Новые типы для meta/allocationMode ─────
+type AllocationMode = "client_payment" | "supplier_refund" | "operator_payment" | "client_refund";
+type TxDraftWithMeta = Partial<TxRow> & { meta?: { allocationMode?: AllocationMode } };
+
+// Режимы распределения по заявкам
+type ExpenseBookingMode = "operator_payment" | "client_refund";
+type IncomeBookingMode  = "client_payment"   | "supplier_refund";
+
 export default function TxModal({
   open, onClose, onSaved, initial,
   accounts, categories, counterparties, fxList, bookingOptionsMap, existingAllocations = [],
@@ -83,18 +91,36 @@ export default function TxModal({
   // -------- Перевод / обмен ----------
   const [fromAccountId, setFromAccountId] = useState<string>("");
   const [toAccountId, setToAccountId]     = useState<string>("");
-  const [transferOut, setTransferOut]     = useState<number>(0);            // списание (валюта from)
-  const [transferIn, setTransferIn]       = useState<string>("");           // зачисление (в валюте to)
+  const [transferOut, setTransferOut]     = useState<number>(0);
+  const [transferIn, setTransferIn]       = useState<string>("");
   const [transferNote, setTransferNote]   = useState<string>("");
 
   const fromAcc = useMemo(() => accounts.find(a => a.id === (fromAccountId || form.accountId || "")), [accounts, fromAccountId, form.accountId]);
   const toAcc   = useMemo(() => accounts.find(a => a.id === toAccountId), [accounts, toAccountId]);
 
+  // ───────── РЕЖИМЫ ДЛЯ «ЗАЯВОК» ─────────
+  const [expenseMode, setExpenseMode] = useState<ExpenseBookingMode>("operator_payment");
+  const [incomeMode,  setIncomeMode]  = useState<IncomeBookingMode>("client_payment");
+
+  // авто-угадывание режима по категории
+  const isClientRefundCategory = useMemo(() => {
+    if (!form.categoryId || form.side !== "expense") return false;
+    const c = categories.find(x => x.id === form.categoryId);
+    const n = (c?.name || "").toLowerCase();
+    return /(refund|retur|возврат)/i.test(n) && !/(supplier|operator|поставщик|оператор)/i.test(n);
+  }, [form.categoryId, form.side, categories]);
+
+  const isSupplierRefundCategory = useMemo(() => {
+    if (!form.categoryId || form.side !== "income") return false;
+    const c = categories.find(x => x.id === form.categoryId);
+    const n = (c?.name || "").toLowerCase();
+    return /(refund|retur|возврат)/i.test(n) && /(supplier|operator|поставщик|оператор)/i.test(n);
+  }, [form.categoryId, form.side, categories]);
+
   // init/open
   useEffect(() => {
     if (!open) return;
     if (initial && isEdit) {
-      // редактирование существующей НЕ-переводной транзакции
       setForm({
         ...initial,
         amount: Math.abs(Number(initial.amount || 0)),
@@ -103,7 +129,6 @@ export default function TxModal({
         bookingId: "",
       });
 
-      // founders предзаполнение
       const igSaved = Number((initial as any)?.ownerIgorEUR || 0);
       const evSaved = Number((initial as any)?.ownerEvgeniyEUR || 0);
       const initOwner = (initial as any)?.ownerWho as OwnerWho | null | undefined;
@@ -112,7 +137,7 @@ export default function TxModal({
       setIgorEUR(igSaved > 0 ? String(r2(igSaved)) : "");
       setEvgEUR(evSaved > 0 ? String(r2(evSaved)) : "");
       setBookingSearch("");
-      // перевод править как пару в этой модалке не поддерживаем
+
       setFromAccountId("");
       setToAccountId("");
       setTransferOut(0);
@@ -142,12 +167,14 @@ export default function TxModal({
       setLastEdited(null);
       setBookingSearch("");
 
-      // перевод
       setFromAccountId(firstAcc?.id || "");
       setToAccountId("");
       setTransferOut(0);
       setTransferIn("");
       setTransferNote("");
+
+      setExpenseMode("operator_payment");
+      setIncomeMode("client_payment");
     }
   }, [open, isEdit, initial, accounts]);
 
@@ -167,6 +194,16 @@ export default function TxModal({
     else setTarget((t)=> t === "transfer" ? "transfer" : "bookings");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.side]);
+
+  // авто-режимы по категории
+  useEffect(() => {
+    if (!open) return;
+    if (form.side === "expense") {
+      setExpenseMode(isClientRefundCategory ? "client_refund" : "operator_payment");
+    } else if (form.side === "income") {
+      setIncomeMode(isSupplierRefundCategory ? "supplier_refund" : "client_payment");
+    }
+  }, [open, form.side, isClientRefundCategory, isSupplierRefundCategory]);
 
   const isIncome = form.side === "income";
 
@@ -220,10 +257,14 @@ export default function TxModal({
       setIgorEUR(String(half));
       setEvgEUR(String(r2(total - half)));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [foundersEUR, target, open]);
+  }, [foundersEUR, target, open]); // eslint-disable-line
 
-  // «наложенная» карта опций
+  // Эффективная «сторона» для UI-компонентов в спец-режимах
+  const uiSideForBookings: CategorySide =
+    (form.side === "income" && incomeMode === "supplier_refund") ? "expense"
+    : form.side as CategorySide;
+
+  // «наложенная» карта опций с учётом режима
   const optionsOverlayMap: Map<string, BookingOption> = useMemo(() => {
     const delta = new Map<string, number>();
     for (const a of (form.bookingAllocations || [])) {
@@ -234,16 +275,27 @@ export default function TxModal({
     bookingOptionsMap.forEach((opt, id) => {
       const dec = delta.get(id) || 0;
       const clone: BookingOption = { ...opt };
+
       if (form.side === "income") {
-        clone.leftIncome = Math.max(0, (opt.leftIncome || 0) - dec);
+        if (incomeMode === "client_payment") {
+          clone.leftIncome = Math.max(0, (opt.leftIncome || 0) - dec);
+        } else {
+          const supplierRefundLeft = Math.max(0, -Number(opt.leftExpense || 0));
+          clone.leftExpense = Math.max(0, supplierRefundLeft - dec);
+          clone.leftIncome = 0;
+        }
       } else {
-        if ((opt.leftExpense || 0) > 0) clone.leftExpense = Math.max(0, (opt.leftExpense || 0) - dec);
-        else clone.clientOverpay = Math.max(0, (opt.clientOverpay || 0) - dec);
+        if (expenseMode === "operator_payment") {
+          clone.leftExpense = Math.max(0, (opt.leftExpense || 0) - dec);
+        } else {
+          clone.clientOverpay = Math.max(0, (opt.clientOverpay || 0) - dec);
+          clone.leftExpense = 0;
+        }
       }
       out.set(id, clone);
     });
     return out;
-  }, [bookingOptionsMap, form.bookingAllocations, form.side]);
+  }, [bookingOptionsMap, form.bookingAllocations, form.side, expenseMode, incomeMode]);
 
   const currentBookingOption = useMemo(() => {
     const id = form.bookingId || form.bookingAllocations?.[0]?.bookingId;
@@ -254,16 +306,29 @@ export default function TxModal({
   const addAllocationFromSelect = () => {
     if (target !== "bookings") return;
     if (allocateRemain <= 0) return;
+
     const chosen = form.bookingId || currentBookingOption?.id;
     if (!chosen) return;
     const opt = optionsOverlayMap.get(chosen);
     if (!opt) return;
 
-    let leftHere = isIncome ? opt.leftIncome : opt.leftExpense;
-    if (!isIncome && (!leftHere || leftHere <= 0) && (opt.clientOverpay || 0) > 0) {
-      leftHere = opt.clientOverpay!;
+    let leftHere = 0;
+
+    if (form.side === "income") {
+      if (incomeMode === "client_payment") {
+        leftHere = Number(opt.leftIncome || 0);
+      } else {
+        leftHere = Number(opt.leftExpense || 0);
+      }
+    } else {
+      if (expenseMode === "operator_payment") {
+        leftHere = Math.max(0, Number(opt.leftExpense || 0));
+      } else {
+        leftHere = Math.max(0, Number(opt.clientOverpay || 0));
+      }
     }
-    const base = leftHere && leftHere > 0 ? leftHere : allocateRemain;
+
+    const base = leftHere > 0 ? leftHere : allocateRemain;
     const amount = Math.min(base, allocateRemain);
     if (amount <= 0) return;
 
@@ -304,19 +369,16 @@ export default function TxModal({
       const outAmt = Number(transferOut || 0);
       if (!(outAmt > 0)) { alert("Сумма списания должна быть > 0."); return; }
 
-      // EUR эквиваленты
       const baseEUR_out = eurFrom(outAmt, fromAcc.currency as Currency, form.date || todayISO(), fxList);
 
-      // зачисление: либо вручную, либо сконвертируем по курсу
       let inAmt = transferIn !== "" ? Number(transferIn) : undefined;
       if (inAmt === undefined) {
-        // конвертируем через EUR
         const eur = baseEUR_out;
         const fx = fxList.find(f => f.id)?.rates as Partial<Record<Currency, number>> | undefined;
         if (toAcc.currency === "EUR") inAmt = eur;
         else {
           const rTo = fx?.[toAcc.currency as Currency];
-          inAmt = rTo && rTo > 0 ? eur * rTo : eur; // fallback
+          inAmt = rTo && rTo > 0 ? eur * rTo : eur;
         }
       }
       inAmt = r2(inAmt || 0);
@@ -326,7 +388,6 @@ export default function TxModal({
       const transferPairId = (globalThis as any).crypto?.randomUUID?.() || `tr_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const commonNote = transferNote || form.note || "";
 
-      // 1) OUT (списание)
       const outPayload: any = {
         date: form.date || todayISO(),
         type: "out",
@@ -344,7 +405,6 @@ export default function TxModal({
         toAccountId: toAcc.id,
       };
 
-      // 2) IN (зачисление)
       const inPayload: any = {
         date: form.date || todayISO(),
         type: "in",
@@ -362,11 +422,9 @@ export default function TxModal({
         fromAccountId: fromAcc.id,
       };
 
-      // сохраняем обе
       const refOut = await addDoc(collection(db, "finance_transactions"), outPayload);
       const refIn  = await addDoc(collection(db, "finance_transactions"), inPayload);
 
-      // вернём id прихода, чтобы подсветить «плюс»
       onSaved?.(refIn.id);
       onClose();
       return;
@@ -408,26 +466,27 @@ export default function TxModal({
       }
     }
 
-    // готовим payload
-    let ownerWhoAuto: OwnerWho | null = form.ownerWho ?? null;
-    let ownerIgorEUR = 0, ownerEvgeniyEUR = 0;
+    // meta: allocationMode для серверной логики
+    const allocationMode: AllocationMode | undefined =
+      target !== "bookings" ? undefined
+      : (isIncome ? incomeMode : expenseMode);
 
-    if (target === "founders") {
-      ownerIgorEUR = r2(+Number(igorEUR || 0));
-      ownerEvgeniyEUR = r2(+Number(evgEUR  || 0));
-      if (ownerIgorEUR > 0 && ownerEvgeniyEUR === 0) ownerWhoAuto = "igor";
-      else if (ownerEvgeniyEUR > 0 && ownerIgorEUR === 0) ownerWhoAuto = "evgeniy";
-      else if (Math.abs(ownerIgorEUR - ownerEvgeniyEUR) <= 0.01 && (ownerIgorEUR + ownerEvgeniyEUR) > 0) ownerWhoAuto = "split50";
-      else ownerWhoAuto = null;
-    }
+    // ─── ВАЖНО: создаём draft с расширенным типом и передаём его в buildTxPayload ───
+    const draft: TxDraftWithMeta = {
+      ...form,
+      ownerWho: form.ownerWho ?? null,
+      bookingAllocations: target === "bookings" ? finalAllocs : existingAllocations,
+      ...(target === "founders"
+        ? { ownerIgorEUR: r2(+Number(igorEUR || 0)), ownerEvgeniyEUR: r2(+Number(evgEUR || 0)) }
+        : {}),
+      meta: {
+        ...(form as any).meta,
+        allocationMode,
+      },
+    };
 
     const payload = buildTxPayload(
-      {
-        ...form,
-        ownerWho: ownerWhoAuto,
-        bookingAllocations: target === "bookings" ? finalAllocs : existingAllocations,
-        ...(target === "founders" ? { ownerIgorEUR, ownerEvgeniyEUR } : {}),
-      },
+      draft, // <— больше нет excess property check
       { accounts, categories, counterparties, fxList },
       initial?.id || undefined
     );
@@ -450,6 +509,19 @@ export default function TxModal({
 
   if (!open) return null;
 
+  const bookingLabel = (() => {
+    if (target !== "bookings") return "";
+    if (form.side === "income") {
+      return (incomeMode === "supplier_refund")
+        ? "Заявка (возврат от поставщика — переплата по НЕТТО)"
+        : "Заявка (неоплаченные по клиенту — БРУТТО)";
+    } else {
+      return (expenseMode === "client_refund")
+        ? "Заявка (переплата клиента — возврат БРУТТО)"
+        : "Заявка (остаток оплаты оператору — НЕТТО)";
+    }
+  })();
+
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-3">
       <div className="w-full max-w-3xl bg-white rounded-xl p-5">
@@ -464,7 +536,6 @@ export default function TxModal({
               value={form.date || ""} onChange={(e) => setForm((s) => ({ ...s, date: e.target.value }))}/>
           </Field>
 
-          {/* Для доход/расход — аккаунт; для перевода — блок ниже */}
           {target !== "transfer" && (
             <Field label="Счёт">
               <select className="w-full border rounded px-2 py-1"
@@ -478,7 +549,6 @@ export default function TxModal({
             </Field>
           )}
 
-          {/* Тип доход/расход только для обычного режима */}
           {target !== "transfer" && (
             <>
               <Field label="Тип">
@@ -502,7 +572,6 @@ export default function TxModal({
             </>
           )}
 
-          {/* Сумма (для обычного режима) */}
           {target !== "transfer" && (
             <>
               <Field label={`Сумма (${form.currency})`}>
@@ -526,7 +595,6 @@ export default function TxModal({
             </>
           )}
 
-          {/* Назначение */}
           <Field label="Назначение" full>
             <div className="inline-flex gap-2">
               <button className={`px-3 py-2 rounded-lg border ${target === "bookings" ? "bg-blue-50 border-blue-400 text-blue-700" : ""}`} title="По заявкам" onClick={() => setTarget("bookings")}>
@@ -541,12 +609,57 @@ export default function TxModal({
             </div>
           </Field>
 
-          {/* ЗАЯВКИ */}
+          {target === "bookings" && form.side === "expense" && (
+            <Field label="Режим расхода по заявке (куда списывать)" full>
+              <div className="inline-flex rounded-lg border overflow-hidden">
+                <button
+                  type="button"
+                  className={`px-3 py-1 text-sm ${expenseMode === "operator_payment" ? "bg-blue-600 text-white" : "bg-white"}`}
+                  onClick={() => setExpenseMode("operator_payment")}
+                  title="Оплата поставщику (нетто)"
+                >
+                  Оплата поставщику (нетто)
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-1 text-sm border-l ${expenseMode === "client_refund" ? "bg-blue-600 text-white" : "bg-white"}`}
+                  onClick={() => setExpenseMode("client_refund")}
+                  title="Возврат клиенту (брутто)"
+                >
+                  Возврат клиенту (брутто)
+                </button>
+              </div>
+            </Field>
+          )}
+
+          {target === "bookings" && form.side === "income" && (
+            <Field label="Режим дохода по заявке (откуда поступление)" full>
+              <div className="inline-flex rounded-lg border overflow-hidden">
+                <button
+                  type="button"
+                  className={`px-3 py-1 text-sm ${incomeMode === "client_payment" ? "bg-blue-600 text-white" : "bg-white"}`}
+                  onClick={() => setIncomeMode("client_payment")}
+                  title="Платёж клиента (брутто)"
+                >
+                  Платёж клиента (брутто)
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-1 text-sm border-l ${incomeMode === "supplier_refund" ? "bg-blue-600 text-white" : "bg-white"}`}
+                  onClick={() => setIncomeMode("supplier_refund")}
+                  title="Возврат от поставщика (нетто)"
+                >
+                  Возврат от поставщика (нетто)
+                </button>
+              </div>
+            </Field>
+          )}
+
           {target === "bookings" && (
             <>
-              <Field label={`Заявка (${form.side === "income" ? "неоплаченные по клиенту" : "остаток оплаты оператору / переплата клиента"})`} full>
+              <Field label={bookingLabel} full>
                 <BookingQuickSearch
-                  side={form.side as CategorySide}
+                  side={uiSideForBookings}
                   search={bookingSearch}
                   onSearch={setBookingSearch}
                   map={optionsOverlayMap}
@@ -562,7 +675,7 @@ export default function TxModal({
 
               <Field label="" full>
                 <AllocationsEditor
-                  side={form.side as CategorySide}
+                  side={uiSideForBookings}
                   allocations={form.bookingAllocations || []}
                   onChange={changeAllocations}
                   optionsMap={optionsOverlayMap}
@@ -573,7 +686,6 @@ export default function TxModal({
             </>
           )}
 
-          {/* УЧРЕДИТЕЛИ */}
           {target === "founders" && (
             <>
               <Field label="К распределению между учредителями (EUR)" full>
@@ -620,7 +732,6 @@ export default function TxModal({
             </>
           )}
 
-          {/* ПЕРЕВОД / ОБМЕН */}
           {target === "transfer" && (
             <>
               <Field label="Со счёта">
@@ -691,7 +802,9 @@ export default function TxModal({
         </div>
 
         <div className="mt-4 flex items-center justify-between gap-2">
-          <div className="text-xs text-gray-600">Подсказка: возврат клиенту делайте как расход — переплата исчезнет из списка сразу.</div>
+          <div className="text-xs text-gray-600">
+            Подсказка: возврат клиенту делай как расход в режиме «Возврат клиенту (брутто)» — переплата исчезнет из списка.
+          </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={onClose} className="h-8 px-3 text-xs">Отмена</Button>
             <Button onClick={save} className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700" disabled={target==="bookings" && allocateRemain < 0}>
