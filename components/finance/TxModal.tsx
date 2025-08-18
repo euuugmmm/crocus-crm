@@ -32,7 +32,7 @@ function Field({ label, children, full }: { label: string; children: React.React
   );
 }
 
-type TargetMode = "bookings" | "founders";
+type TargetMode = "bookings" | "founders" | "transfer";
 
 export default function TxModal({
   open, onClose, onSaved, initial,
@@ -51,7 +51,7 @@ export default function TxModal({
 }) {
   const isEdit = !!initial?.id;
 
-  // форма
+  // форма (общая)
   const [form, setForm] = useState<Partial<TxRow>>({
     date: todayISO(),
     accountId: "",
@@ -80,10 +80,21 @@ export default function TxModal({
   // поиск заявки
   const [bookingSearch, setBookingSearch] = useState("");
 
+  // -------- Перевод / обмен ----------
+  const [fromAccountId, setFromAccountId] = useState<string>("");
+  const [toAccountId, setToAccountId]     = useState<string>("");
+  const [transferOut, setTransferOut]     = useState<number>(0);            // списание (валюта from)
+  const [transferIn, setTransferIn]       = useState<string>("");           // зачисление (в валюте to)
+  const [transferNote, setTransferNote]   = useState<string>("");
+
+  const fromAcc = useMemo(() => accounts.find(a => a.id === (fromAccountId || form.accountId || "")), [accounts, fromAccountId, form.accountId]);
+  const toAcc   = useMemo(() => accounts.find(a => a.id === toAccountId), [accounts, toAccountId]);
+
   // init/open
   useEffect(() => {
     if (!open) return;
     if (initial && isEdit) {
+      // редактирование существующей НЕ-переводной транзакции
       setForm({
         ...initial,
         amount: Math.abs(Number(initial.amount || 0)),
@@ -92,7 +103,7 @@ export default function TxModal({
         bookingId: "",
       });
 
-      // показать founders если это расход и есть точные суммы/ownerWho
+      // founders предзаполнение
       const igSaved = Number((initial as any)?.ownerIgorEUR || 0);
       const evSaved = Number((initial as any)?.ownerEvgeniyEUR || 0);
       const initOwner = (initial as any)?.ownerWho as OwnerWho | null | undefined;
@@ -101,6 +112,12 @@ export default function TxModal({
       setIgorEUR(igSaved > 0 ? String(r2(igSaved)) : "");
       setEvgEUR(evSaved > 0 ? String(r2(evSaved)) : "");
       setBookingSearch("");
+      // перевод править как пару в этой модалке не поддерживаем
+      setFromAccountId("");
+      setToAccountId("");
+      setTransferOut(0);
+      setTransferIn("");
+      setTransferNote("");
     } else {
       const firstAcc = accounts.find((a) => !a.archived);
       setForm({
@@ -124,10 +141,17 @@ export default function TxModal({
       setEvgEUR("");
       setLastEdited(null);
       setBookingSearch("");
+
+      // перевод
+      setFromAccountId(firstAcc?.id || "");
+      setToAccountId("");
+      setTransferOut(0);
+      setTransferIn("");
+      setTransferNote("");
     }
   }, [open, isEdit, initial, accounts]);
 
-  // sync currency to account
+  // sync currency to account (обычные доход/расход)
   useEffect(() => {
     if (!form.accountId) return;
     const acc = accounts.find((a) => a.id === form.accountId);
@@ -136,11 +160,11 @@ export default function TxModal({
     }
   }, [form.accountId, accounts]); // eslint-disable-line
 
-  // авто-переключение вкладки по типу
+  // авто-переключение вкладки по типу доход/расход
   useEffect(() => {
     if (!open) return;
-    if (form.side === "expense") setTarget("founders");
-    else setTarget("bookings");
+    if (form.side === "expense") setTarget((t)=> t === "transfer" ? "transfer" : "founders");
+    else setTarget((t)=> t === "transfer" ? "transfer" : "bookings");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.side]);
 
@@ -202,7 +226,7 @@ export default function TxModal({
   // «наложенная» карта опций
   const optionsOverlayMap: Map<string, BookingOption> = useMemo(() => {
     const delta = new Map<string, number>();
-    for (const a of form.bookingAllocations || []) {
+    for (const a of (form.bookingAllocations || [])) {
       const v = (delta.get(a.bookingId) || 0) + Math.max(0, Number(a.amountBase || 0));
       delta.set(a.bookingId, +v.toFixed(2));
     }
@@ -213,11 +237,8 @@ export default function TxModal({
       if (form.side === "income") {
         clone.leftIncome = Math.max(0, (opt.leftIncome || 0) - dec);
       } else {
-        if ((opt.leftExpense || 0) > 0) {
-          clone.leftExpense = Math.max(0, (opt.leftExpense || 0) - dec);
-        } else {
-          clone.clientOverpay = Math.max(0, (opt.clientOverpay || 0) - dec);
-        }
+        if ((opt.leftExpense || 0) > 0) clone.leftExpense = Math.max(0, (opt.leftExpense || 0) - dec);
+        else clone.clientOverpay = Math.max(0, (opt.clientOverpay || 0) - dec);
       }
       out.set(id, clone);
     });
@@ -263,7 +284,7 @@ export default function TxModal({
   const applyOwnerPreset = (preset: OwnerWho | "" ) => {
     const total = foundersEUR;
     if (!preset) { setForm(s => ({ ...s, ownerWho: null })); return; }
-    if (preset === "igor")      { setIgorEUR(String(r2(total))); setEvgEUR("0"); }
+    if (preset === "igor")         { setIgorEUR(String(r2(total))); setEvgEUR("0"); }
     else if (preset === "evgeniy") { setIgorEUR("0"); setEvgEUR(String(r2(total))); }
     else { const half = r2(total / 2); setIgorEUR(String(half)); setEvgEUR(String(r2(total - half))); preset = "split50"; }
     setLastEdited(null);
@@ -272,7 +293,87 @@ export default function TxModal({
 
   // save
   const save = async () => {
-    if (!form.date || !form.accountId || !form.side) {
+    if (!form.date) { alert("Укажите дату."); return; }
+
+    // === ПЕРЕВОД / ОБМЕН: создаём ДВЕ транзакции ===
+    if (target === "transfer") {
+      if (!fromAcc) { alert("Выберите счёт-источник."); return; }
+      if (!toAcc)   { alert("Выберите счёт-получатель."); return; }
+      if (fromAcc.id === toAcc.id) { alert("Счета должны отличаться."); return; }
+
+      const outAmt = Number(transferOut || 0);
+      if (!(outAmt > 0)) { alert("Сумма списания должна быть > 0."); return; }
+
+      // EUR эквиваленты
+      const baseEUR_out = eurFrom(outAmt, fromAcc.currency as Currency, form.date || todayISO(), fxList);
+
+      // зачисление: либо вручную, либо сконвертируем по курсу
+      let inAmt = transferIn !== "" ? Number(transferIn) : undefined;
+      if (inAmt === undefined) {
+        // конвертируем через EUR
+        const eur = baseEUR_out;
+        const fx = fxList.find(f => f.id)?.rates as Partial<Record<Currency, number>> | undefined;
+        if (toAcc.currency === "EUR") inAmt = eur;
+        else {
+          const rTo = fx?.[toAcc.currency as Currency];
+          inAmt = rTo && rTo > 0 ? eur * rTo : eur; // fallback
+        }
+      }
+      inAmt = r2(inAmt || 0);
+
+      const baseEUR_in = eurFrom(inAmt, toAcc.currency as Currency, form.date || todayISO(), fxList);
+
+      const transferPairId = (globalThis as any).crypto?.randomUUID?.() || `tr_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const commonNote = transferNote || form.note || "";
+
+      // 1) OUT (списание)
+      const outPayload: any = {
+        date: form.date || todayISO(),
+        type: "out",
+        side: "expense",
+        status: "actual",
+        method: form.method || "bank",
+        accountId: fromAcc.id,
+        amount: { value: +r2(outAmt), currency: fromAcc.currency },
+        baseAmount: +r2(baseEUR_out),
+        categoryId: null,
+        counterpartyId: null,
+        note: `[Перевод → ${toAcc.name}] ${commonNote}`.trim(),
+        transferPairId,
+        transferLeg: "out",
+        toAccountId: toAcc.id,
+      };
+
+      // 2) IN (зачисление)
+      const inPayload: any = {
+        date: form.date || todayISO(),
+        type: "in",
+        side: "income",
+        status: "actual",
+        method: form.method || "bank",
+        accountId: toAcc.id,
+        amount: { value: +r2(inAmt), currency: toAcc.currency },
+        baseAmount: +r2(baseEUR_in),
+        categoryId: null,
+        counterpartyId: null,
+        note: `[Перевод ← ${fromAcc.name}] ${commonNote}`.trim(),
+        transferPairId,
+        transferLeg: "in",
+        fromAccountId: fromAcc.id,
+      };
+
+      // сохраняем обе
+      const refOut = await addDoc(collection(db, "finance_transactions"), outPayload);
+      const refIn  = await addDoc(collection(db, "finance_transactions"), inPayload);
+
+      // вернём id прихода, чтобы подсветить «плюс»
+      onSaved?.(refIn.id);
+      onClose();
+      return;
+    }
+
+    // === Обычный доход/расход (включая заявки/учредителей) ===
+    if (!form.accountId || !form.side) {
       alert("Дата, счёт и тип обязательны");
       return;
     }
@@ -314,7 +415,6 @@ export default function TxModal({
     if (target === "founders") {
       ownerIgorEUR = r2(+Number(igorEUR || 0));
       ownerEvgeniyEUR = r2(+Number(evgEUR  || 0));
-      // авто-метка только если 100/0, 0/100 или 50/50
       if (ownerIgorEUR > 0 && ownerEvgeniyEUR === 0) ownerWhoAuto = "igor";
       else if (ownerEvgeniyEUR > 0 && ownerIgorEUR === 0) ownerWhoAuto = "evgeniy";
       else if (Math.abs(ownerIgorEUR - ownerEvgeniyEUR) <= 0.01 && (ownerIgorEUR + ownerEvgeniyEUR) > 0) ownerWhoAuto = "split50";
@@ -333,15 +433,15 @@ export default function TxModal({
     );
 
     if (isEdit && initial?.id) {
-      await updateDoc(doc(db, "finance_transactions", initial.id), payload);
+      await updateDoc(doc(db, "finance_transactions", initial.id), payload as any);
       if (target === "bookings") {
-        await upsertOrdersForTransaction(initial.id, payload, finalAllocs);
+        await upsertOrdersForTransaction(initial.id, payload as any, finalAllocs);
       }
       onSaved?.(initial.id);
     } else {
-      const ref = await addDoc(collection(db, "finance_transactions"), payload);
+      const ref = await addDoc(collection(db, "finance_transactions"), payload as any);
       if (target === "bookings") {
-        await upsertOrdersForTransaction(ref.id, payload, finalAllocs);
+        await upsertOrdersForTransaction(ref.id, payload as any, finalAllocs);
       }
       onSaved?.(ref.id);
     }
@@ -363,55 +463,70 @@ export default function TxModal({
             <input type="date" className="w-full border rounded px-2 py-1"
               value={form.date || ""} onChange={(e) => setForm((s) => ({ ...s, date: e.target.value }))}/>
           </Field>
-          <Field label="Счёт">
-            <select className="w-full border rounded px-2 py-1"
-              value={form.accountId || ""} onChange={(e) => setForm((s) => ({ ...s, accountId: e.target.value }))}>
-              <option value="" disabled>— выберите счёт —</option>
-              {accounts.filter((a) => !a.archived).map((a) => (
-                <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
-              ))}
-            </select>
-          </Field>
 
-          <Field label="Тип">
-            <select className="w-full border rounded px-2 py-1"
-              value={form.side || "income"}
-              onChange={(e) => setForm((s) => ({ ...s, side: e.target.value as CategorySide, bookingId: "", bookingAllocations: [] }))}>
-              <option value="income">Доход</option>
-              <option value="expense">Расход</option>
-            </select>
-          </Field>
-          <Field label="Категория">
-            <select className="w-full border rounded px-2 py-1"
-              value={form.categoryId ?? ""}
-              onChange={(e) => setForm((s) => ({ ...s, categoryId: e.target.value || null }))}>
-              <option value="">— не задано —</option>
-              {categories.filter((c) => !c.archived && c.side === form.side).map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </Field>
+          {/* Для доход/расход — аккаунт; для перевода — блок ниже */}
+          {target !== "transfer" && (
+            <Field label="Счёт">
+              <select className="w-full border rounded px-2 py-1"
+                value={form.accountId || ""}
+                onChange={(e) => setForm((s) => ({ ...s, accountId: e.target.value }))}>
+                <option value="" disabled>— выберите счёт —</option>
+                {accounts.filter((a) => !a.archived).map((a) => (
+                  <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
+                ))}
+              </select>
+            </Field>
+          )}
 
-          <Field label={`Сумма (${form.currency})`}>
-            <input type="number" step="0.01" className="w-full border rounded px-2 py-1"
-              value={form.amount ?? 0}
-              onChange={(e) => setForm((s) => ({ ...s, amount: Number(e.target.value || 0) }))}/>
-            {isEdit && alreadyAllocatedEUR > 0 && (
-              <div className="text-[11px] text-gray-600 mt-1">Уже распределено (по ордерам): {alreadyAllocatedEUR.toFixed(2)} €</div>
-            )}
-          </Field>
-          <Field label="Контрагент">
-            <select className="w-full border rounded px-2 py-1"
-              value={form.counterpartyId ?? ""}
-              onChange={(e) => setForm((s) => ({ ...s, counterpartyId: e.target.value || null }))}>
-              <option value="">— не задан —</option>
-              {counterparties.filter((x) => !x.archived).map((x) => (
-                <option key={x.id} value={x.id}>{x.name}</option>
-              ))}
-            </select>
-          </Field>
+          {/* Тип доход/расход только для обычного режима */}
+          {target !== "transfer" && (
+            <>
+              <Field label="Тип">
+                <select className="w-full border rounded px-2 py-1"
+                  value={form.side || "income"}
+                  onChange={(e) => setForm((s) => ({ ...s, side: e.target.value as CategorySide, bookingId: "", bookingAllocations: [] }))}>
+                  <option value="income">Доход</option>
+                  <option value="expense">Расход</option>
+                </select>
+              </Field>
+              <Field label="Категория">
+                <select className="w-full border rounded px-2 py-1"
+                  value={form.categoryId ?? ""}
+                  onChange={(e) => setForm((s) => ({ ...s, categoryId: e.target.value || null }))}>
+                  <option value="">— не задано —</option>
+                  {categories.filter((c) => !c.archived && c.side === form.side).map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </Field>
+            </>
+          )}
 
-          {/* назначение */}
+          {/* Сумма (для обычного режима) */}
+          {target !== "transfer" && (
+            <>
+              <Field label={`Сумма (${form.currency})`}>
+                <input type="number" step="0.01" className="w-full border rounded px-2 py-1"
+                  value={form.amount ?? 0}
+                  onChange={(e) => setForm((s) => ({ ...s, amount: Number(e.target.value || 0) }))}/>
+                {isEdit && alreadyAllocatedEUR > 0 && (
+                  <div className="text-[11px] text-gray-600 mt-1">Уже распределено (по ордерам): {alreadyAllocatedEUR.toFixed(2)} €</div>
+                )}
+              </Field>
+              <Field label="Контрагент">
+                <select className="w-full border rounded px-2 py-1"
+                  value={form.counterpartyId ?? ""}
+                  onChange={(e) => setForm((s) => ({ ...s, counterpartyId: e.target.value || null }))}>
+                  <option value="">— не задан —</option>
+                  {counterparties.filter((x) => !x.archived).map((x) => (
+                    <option key={x.id} value={x.id}>{x.name}</option>
+                  ))}
+                </select>
+              </Field>
+            </>
+          )}
+
+          {/* Назначение */}
           <Field label="Назначение" full>
             <div className="inline-flex gap-2">
               <button className={`px-3 py-2 rounded-lg border ${target === "bookings" ? "bg-blue-50 border-blue-400 text-blue-700" : ""}`} title="По заявкам" onClick={() => setTarget("bookings")}>
@@ -419,6 +534,9 @@ export default function TxModal({
               </button>
               <button className={`px-3 py-2 rounded-lg border ${target === "founders" ? "bg-blue-50 border-blue-400 text-blue-700" : ""}`} title="Учредители" onClick={() => setTarget("founders")}>
                 <Users2 className="w-4 h-4" />
+              </button>
+              <button className={`px-3 py-2 rounded-lg border ${target === "transfer" ? "bg-blue-50 border-blue-400 text-blue-700" : ""}`} title="Перевод / обмен" onClick={() => setTarget("transfer")}>
+                ⇄
               </button>
             </div>
           </Field>
@@ -502,7 +620,72 @@ export default function TxModal({
             </>
           )}
 
-          <Field label="Заметка" full>
+          {/* ПЕРЕВОД / ОБМЕН */}
+          {target === "transfer" && (
+            <>
+              <Field label="Со счёта">
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={fromAccountId || ""}
+                  onChange={(e) => {
+                    setFromAccountId(e.target.value);
+                    if (!form.accountId) setForm(s => ({ ...s, accountId: e.target.value }));
+                  }}
+                >
+                  <option value="" disabled>— выберите счёт —</option>
+                  {accounts.filter(a => !a.archived).map(a=>(
+                    <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="На счёт">
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={toAccountId || ""}
+                  onChange={(e) => setToAccountId(e.target.value)}
+                >
+                  <option value="" disabled>— выберите счёт —</option>
+                  {accounts.filter(a => !a.archived).map(a=>(
+                    <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label={`Списать (${fromAcc?.currency || "—"})`}>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="w-full border rounded px-2 py-1"
+                  value={transferOut}
+                  onChange={(e) => setTransferOut(Number(e.target.value || 0))}
+                  placeholder="0.00"
+                />
+              </Field>
+
+              <Field label={`Зачислить (${toAcc?.currency || "—"})`}>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="w-full border rounded px-2 py-1"
+                  value={transferIn}
+                  onChange={(e) => setTransferIn(e.target.value)}
+                  placeholder="0.00 (можно оставить пустым — сконвертируем)"
+                />
+              </Field>
+
+              <Field label="Заметка к переводу" full>
+                <input
+                  className="w-full border rounded px-2 py-1"
+                  value={transferNote}
+                  onChange={(e) => setTransferNote(e.target.value)}
+                  placeholder="например: обмен валюты / перевод между своими счетами"
+                />
+              </Field>
+            </>
+          )}
+
+          <Field label="Заметка (общая)" full>
             <input className="w-full border rounded px-2 py-1" value={form.note || ""} onChange={(e) => setForm((s) => ({ ...s, note: e.target.value }))} placeholder="комментарий" />
           </Field>
         </div>
