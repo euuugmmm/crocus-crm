@@ -73,7 +73,7 @@ function init() {
 }
 
 export const adminApp = init();
-export const adminDb = admin.firestore();
+export const adminDB = admin.firestore();
 export const adminFs = admin.firestore;
 export const adminAuth = admin.auth();
 export const adminStorage = admin.storage();
