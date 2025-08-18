@@ -6,275 +6,199 @@ import { useRouter } from "next/router";
 import ManagerLayout from "@/components/layouts/ManagerLayout";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
-import {
-  collection, onSnapshot, orderBy, query,
-} from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
-import type { Account, Category, Currency, FxRates, Planned, Transaction } from "@/lib/finance/types";
+import { RotateCcw, Clock } from "lucide-react";
 
-type FxMap = Partial<Record<Currency, number>>; // 1 EUR = r(CCY)
+/** ===== helpers ===== */
+const fmtDMY = (iso?: string) => {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-");
+  return y && m && d ? `${d}.${m}.${y}` : iso;
+};
+const toLocalISO = (d: Date) => {
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return z.toISOString().slice(0, 10);
+};
 
-function pickLatestFx(list: FxRates[]): FxRates | null {
-  if (!list.length) return null;
-  const sorted = [...list].sort((a,b)=> a.id < b.id ? 1 : -1);
-  return sorted[0];
-}
+/** ===== cache doc shape (минимально нужное под UI) ===== */
+type CachedAccountRow = {
+  id: string;
+  name: string;
+  currency: string;
+  balAmt: number;
+  balEur: number;
+};
+type CachedPlanned = {
+  id: string;
+  date: string; // YYYY-MM-DD
+  side: "income" | "expense";
+  amount: number;
+  currency: string;
+  eurAmount: number;
+  accountName?: string;
+  accountId?: string;
+  categoryName?: string;
+  categoryId?: string;
+};
+type CachedRecentTx = {
+  id: string;
+  date: string; // YYYY-MM-DD
+  type: "in" | "out" | "transfer";
+  status: string;
+  account: string;  // уже резолвленное имя или «Перевод»
+  category: string; // уже резолвленное имя
+  amountLabel: string; // "123.45 USD"
+  eur: number;
+  note?: string;
+};
+type FlowDailyRow = { date: string; inflow: number; outflow: number; net: number };
+type OverviewCacheDoc = {
+  updatedAt?: any;
+  accounts?: CachedAccountRow[];
+  totalEur?: number;
+  flowDaily?: FlowDailyRow[];
+  plannedUpcoming?: CachedPlanned[];
+  plannedOverdue?: CachedPlanned[];
+  sumUpcoming?: number;
+  sumOverdue?: number;
+  recentTx?: CachedRecentTx[];
+};
 
-// convert amount between currencies using EUR as pivot.
-// fx.rates: 1 EUR = r(CCY)
-function convert(amount: number, from: Currency, to: Currency, fx: FxRates | null): number {
-  if (!amount) return 0;
-  if (from === to) return amount;
-  if (!fx?.rates) return 0;
-
-  // to EUR
-  let eur = amount;
-  if (from !== "EUR") {
-    const rFrom = (fx.rates as FxMap)[from];
-    if (!rFrom || rFrom <= 0) return 0;
-    eur = amount / rFrom; // 1 CCY = 1/rFrom EUR
-  }
-  // EUR -> to
-  if (to === "EUR") return eur;
-  const rTo = (fx.rates as FxMap)[to];
-  if (!rTo || rTo <= 0) return 0;
-  return eur * rTo;
-}
-
-function eurFrom(amount: number, ccy: Currency, fx: FxRates | null): number {
-  return convert(amount, ccy, "EUR", fx);
-}
+const CACHE_DOC_REF = doc(db, "finance_overviewCache", "summary");
 
 export default function FinanceOverview() {
   const router = useRouter();
   const { user, isManager, isSuperManager, isAdmin } = useAuth();
   const canView = isManager || isSuperManager || isAdmin;
 
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [planned, setPlanned] = useState<Planned[]>([]);
-  const [fxList, setFxList] = useState<FxRates[]>([]);
-
-  // Параметры дашборда
+  // окно для KPI «Приток/Отток/Net»
   const [daysWindow, setDaysWindow] = useState(30);
+
+  // кэш
+  const [cache, setCache] = useState<OverviewCacheDoc | null>(null);
+  const [cacheUpdatedISO, setCacheUpdatedISO] = useState<string | null>(null);
+  const [cacheLoading, setCacheLoading] = useState(true);
+  const [cacheRefreshing, setCacheRefreshing] = useState(false);
 
   useEffect(() => {
     if (!user) { router.replace("/login"); return; }
     if (!canView) { router.replace("/agent/bookings"); return; }
-
-    const ua = onSnapshot(query(collection(db, "finance_accounts")), snap => {
-      setAccounts(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    });
-    const uc = onSnapshot(query(collection(db, "finance_categories")), snap => {
-      setCategories(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    });
-    const ut = onSnapshot(query(collection(db, "finance_transactions"), orderBy("date","desc")), snap => {
-      setTransactions(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    });
-    const up = onSnapshot(query(collection(db, "finance_planned"), orderBy("date","asc")), snap => {
-      setPlanned(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-    });
-    const ur = onSnapshot(query(collection(db, "finance_fxRates")), snap => {
-      setFxList(snap.docs.map(d => ({ id:d.id, ...(d.data() as any) })));
-    });
-
-    return () => { ua(); uc(); ut(); up(); ur(); };
   }, [user, canView, router]);
 
-  const latestFx = useMemo(()=> pickLatestFx(fxList), [fxList]);
-
-  // Индексы для удобства
-  const catById = useMemo(() => {
-    const m = new Map<string, Category>();
-    for (const c of categories) if (c.id) m.set(c.id, c);
-    return m;
-  }, [categories]);
-
-  const accById = useMemo(() => {
-    const m = new Map<string, Account>();
-    for (const a of accounts) if (a.id) m.set(a.id, a);
-    return m;
-  }, [accounts]);
-
-  // Балансы по счетам (по факту/сверено)
-  const accountRows = useMemo(() => {
-    // map accountId -> { amt (в валюте счёта), eur }
-    const agg = new Map<string, { amt: number; eur: number }>();
-    for (const a of accounts) {
-      agg.set(a.id, { amt: Number(a.openingBalance || 0), eur: eurFrom(Number(a.openingBalance || 0), a.currency, latestFx) });
+  const loadCacheOnce = async () => {
+    const snap = await getDoc(CACHE_DOC_REF);
+    if (snap.exists()) {
+      const d = snap.data() as any as OverviewCacheDoc;
+      setCache(d || null);
+      setCacheUpdatedISO(d?.updatedAt?.toDate ? toLocalISO(d.updatedAt.toDate()) : null);
+    } else {
+      setCache(null);
+      setCacheUpdatedISO(null);
     }
+  };
 
-    for (const t of transactions) {
-      if (!(t.status === "actual" || t.status === "reconciled")) continue;
-      if (t.type === "in") {
-        const accId = t.accountId!;
-        const acc = accById.get(accId);
-        if (!acc) continue;
-        const deltaAccCcy =
-          t.amount?.currency === acc.currency
-            ? Number(t.amount?.value || 0)
-            : convert(Number(t.amount?.value || 0), t.amount?.currency || acc.currency, acc.currency, latestFx);
-        const prev = agg.get(accId) || { amt: 0, eur: 0 };
-        agg.set(accId, {
-          amt: prev.amt + deltaAccCcy,
-          eur: prev.eur + Number(t.baseAmount || 0), // baseAmount уже в EUR
-        });
-      } else if (t.type === "out") {
-        const accId = t.accountId!;
-        const acc = accById.get(accId);
-        if (!acc) continue;
-        const deltaAccCcy =
-          t.amount?.currency === acc.currency
-            ? Number(t.amount?.value || 0)
-            : convert(Number(t.amount?.value || 0), t.amount?.currency || acc.currency, acc.currency, latestFx);
-        const prev = agg.get(accId) || { amt: 0, eur: 0 };
-        agg.set(accId, {
-          amt: prev.amt - deltaAccCcy,
-          eur: prev.eur - Number(t.baseAmount || 0),
-        });
-      } else if (t.type === "transfer") {
-        // списание со from
-        if (t.fromAccountId) {
-          const from = accById.get(t.fromAccountId);
-          if (from) {
-            const deltaFrom =
-              t.amount?.currency === from.currency
-                ? Number(t.amount?.value || 0)
-                : convert(Number(t.amount?.value || 0), t.amount?.currency || from.currency, from.currency, latestFx);
-            const prev = agg.get(t.fromAccountId) || { amt: 0, eur: 0 };
-            agg.set(t.fromAccountId, {
-              amt: prev.amt - deltaFrom,
-              eur: prev.eur - Number(t.baseAmount || 0), // допущение: transfer baseAmount считает по from
-            });
-          }
-        }
-        // зачисление на to
-        if (t.toAccountId) {
-          const to = accById.get(t.toAccountId);
-          if (to) {
-            const deltaTo =
-              t.amount?.currency === to.currency
-                ? Number(t.amount?.value || 0)
-                : convert(Number(t.amount?.value || 0), t.amount?.currency || to.currency, to.currency, latestFx);
-            const prev = agg.get(t.toAccountId) || { amt: 0, eur: 0 };
-            agg.set(t.toAccountId, {
-              amt: prev.amt + deltaTo,
-              eur: prev.eur + Number(t.baseAmount || 0),
-            });
-          }
-        }
+  useEffect(() => {
+    if (!user || !canView) return;
+    (async () => {
+      try {
+        setCacheLoading(true);
+        await loadCacheOnce();
+      } finally {
+        setCacheLoading(false);
       }
+    })();
+  }, [user, canView]);
+
+  const refreshCache = async () => {
+    try {
+      setCacheRefreshing(true);
+      const r = await fetch("/api/finance/overview-cache/rebuild", { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      await loadCacheOnce();
+      alert("Кэш обновлён");
+    } catch (e) {
+      console.error("[FinanceOverview] refresh cache failed:", e);
+      alert("Не удалось обновить кэш. См. консоль.");
+    } finally {
+      setCacheRefreshing(false);
     }
+  };
 
-    const rows = accounts
-      .filter(a => !a.archived)
-      .map(a => {
-        const val = agg.get(a.id) || { amt: 0, eur: 0 };
-        return {
-          id: a.id,
-          name: a.name,
-          currency: a.currency,
-          balAmt: +Number(val.amt).toFixed(2),
-          balEur: +Number(val.eur).toFixed(2),
-        };
-      });
-
-    const totalEur = rows.reduce((s, r) => s + r.balEur, 0);
+  /** ===== вычисления по кэшу ===== */
+  const accountRows = useMemo(() => {
+    const rows = cache?.accounts || [];
+    const totalEur = Number(cache?.totalEur || 0);
     return { rows, totalEur: +totalEur.toFixed(2) };
-  }, [accounts, accById, transactions, latestFx]);
+  }, [cache]);
 
-  // Приток/отток за последние N дней (actual+reconciled, без transfer)
   const flow = useMemo(() => {
-    const now = new Date();
-    const from = new Date(now);
-    from.setDate(now.getDate() - daysWindow);
-
+    const list = cache?.flowDaily || [];
+    if (!list.length) {
+      const now = new Date();
+      const from = new Date(now); from.setDate(now.getDate() - daysWindow);
+      const label = `${toLocalISO(from)} — ${toLocalISO(now)}`;
+      return { inflow: 0, outflow: 0, net: 0, periodLabel: label };
+    }
+    const nowISO = toLocalISO(new Date());
+    const fromISO = toLocalISO(new Date(Date.now() - daysWindow * 86400000));
     let inflow = 0, outflow = 0;
-    for (const t of transactions) {
-      if (!(t.status === "actual" || t.status === "reconciled")) continue;
-      if (t.type === "transfer") continue;
-      const d = new Date(t.date);
-      if (d < from || d > now) continue;
-      const eur = Number(t.baseAmount || 0);
-      if (t.type === "in") inflow += eur;
-      else if (t.type === "out") outflow += eur;
+    for (const r of list) {
+      if (r.date >= fromISO && r.date <= nowISO) {
+        inflow += r.inflow || 0;
+        outflow += r.outflow || 0;
+      }
     }
     const net = inflow - outflow;
     return {
       inflow: +inflow.toFixed(2),
       outflow: +outflow.toFixed(2),
       net: +net.toFixed(2),
-      periodLabel: `${from.toISOString().slice(0,10)} — ${now.toISOString().slice(0,10)}`
+      periodLabel: `${fromISO} — ${nowISO}`,
     };
-  }, [transactions, daysWindow]);
+  }, [cache, daysWindow]);
 
-  // Плановые платежи
-  const plannedLists = useMemo(() => {
-    const today = new Date().toISOString().slice(0,10);
-    const upcoming = planned
-      .filter(p => !p.matchedTxId && p.date >= today)
-      .sort((a,b)=> a.date < b.date ? -1 : 1)
-      .slice(0, 10);
-    const overdue = planned
-      .filter(p => !p.matchedTxId && p.date < today)
-      .sort((a,b)=> a.date < b.date ? -1 : 1)
-      .slice(0, 10);
+  const plannedLists = useMemo(() => ({
+    upcoming: cache?.plannedUpcoming || [],
+    overdue: cache?.plannedOverdue || [],
+    sumUpcoming: +(cache?.sumUpcoming || 0).toFixed(2),
+    sumOverdue: +(cache?.sumOverdue || 0).toFixed(2),
+  }), [cache]);
 
-    const sumEur = (list: Planned[]) => +list.reduce((s,p)=> s + Number(p.eurAmount || 0), 0).toFixed(2);
-
-    return {
-      upcoming,
-      overdue,
-      sumUpcoming: sumEur(upcoming),
-      sumOverdue: sumEur(overdue),
-    };
-  }, [planned]);
-
-  // Последние транзакции (факт/сверено)
-  const recentTx = useMemo(() => {
-    return transactions
-      .filter(t => t.status === "actual" || t.status === "reconciled")
-      .slice(0, 10)
-      .map(t => {
-        const cat = t.categoryId ? catById.get(t.categoryId)?.name : undefined;
-        const accName =
-          t.type === "transfer"
-            ? "Перевод"
-            : (t.accountId ? (accById.get(t.accountId)?.name || t.accountId) : "—");
-        return {
-          id: t.id!,
-          date: t.date,
-          type: t.type,
-          status: t.status,
-          account: accName,
-          category: cat || "—",
-          amountLabel: `${(t.amount?.value||0).toFixed(2)} ${t.amount?.currency || ""}`,
-          eur: +Number(t.baseAmount || 0).toFixed(2),
-          note: t.note || "",
-        };
-      });
-  }, [transactions, catById, accById]);
+  const recentTx = useMemo(() => cache?.recentTx || [], [cache]);
 
   return (
     <ManagerLayout>
       <Head><title>Финансовый обзор</title></Head>
-      <div className="max-w-7xl mx-auto py-8 space-y-6">
 
-        {/* Заголовок + окно */}
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">Финансовый обзор</h1>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Окно:</span>
-            <select
-              className="border rounded px-2 py-1 text-sm"
-              value={daysWindow}
-              onChange={e=>setDaysWindow(Number(e.target.value))}
-            >
-              <option value={7}>7 дней</option>
-              <option value={30}>30 дней</option>
-              <option value={90}>90 дней</option>
-            </select>
+      <div className="max-w-7xl mx-auto py-8 space-y-6">
+        {/* Заголовок + окно + кэш-контролы */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Финансовый обзор</h1>
+            <div className="text-xs text-gray-500 mt-1 inline-flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5" />
+              {cacheLoading ? "Кэш: загрузка…" : `Кэш от ${cacheUpdatedISO ? fmtDMY(cacheUpdatedISO) : "—"}`}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">Окно:</span>
+              <select
+                className="border rounded px-2 py-1 text-sm"
+                value={daysWindow}
+                onChange={e=>setDaysWindow(Number(e.target.value))}
+              >
+                <option value={7}>7 дней</option>
+                <option value={30}>30 дней</option>
+                <option value={90}>90 дней</option>
+              </select>
+            </div>
+            <Button onClick={refreshCache} disabled={cacheRefreshing} className="h-8 px-3 text-xs bg-blue-600 hover:bg-blue-700 text-white">
+              <RotateCcw className={`w-4 h-4 ${cacheRefreshing ? "animate-spin" : ""}`} />
+              {cacheRefreshing ? "Обновляю кэш…" : "Обновить кэш"}
+            </Button>
           </div>
         </div>
 
@@ -283,7 +207,7 @@ export default function FinanceOverview() {
           <Kpi title="Денежные средства (EUR)" value={accountRows.totalEur} emphasis />
           <Kpi title="Приток за период (EUR)" value={flow.inflow} />
           <Kpi title="Отток за период (EUR)" value={flow.outflow} />
-          <Kpi title="Net поток (EUR)" value={flow.net} emphasis={true} />
+          <Kpi title="Net поток (EUR)" value={flow.net} emphasis />
         </div>
         <div className="text-xs text-gray-600">Период: {flow.periodLabel}</div>
 
@@ -341,7 +265,7 @@ export default function FinanceOverview() {
                 </tr>
               </thead>
               <tbody>
-                {plannedLists.upcoming.map(p=>(
+                {(plannedLists.upcoming || []).map(p=>(
                   <tr key={p.id} className="text-center">
                     <td className="border px-2 py-1 whitespace-nowrap">{p.date}</td>
                     <td className="border px-2 py-1">
@@ -355,7 +279,7 @@ export default function FinanceOverview() {
                     <td className="border px-2 py-1">{p.categoryName || p.categoryId}</td>
                   </tr>
                 ))}
-                {plannedLists.upcoming.length===0 && (
+                {(plannedLists.upcoming || []).length===0 && (
                   <tr><td colSpan={6} className="border px-2 py-4 text-center text-gray-500">Нет данных</td></tr>
                 )}
               </tbody>
@@ -378,7 +302,7 @@ export default function FinanceOverview() {
                 </tr>
               </thead>
               <tbody>
-                {plannedLists.overdue.map(p=>(
+                {(plannedLists.overdue || []).map(p=>(
                   <tr key={p.id} className="text-center">
                     <td className="border px-2 py-1 whitespace-nowrap">{p.date}</td>
                     <td className="border px-2 py-1">
@@ -392,7 +316,7 @@ export default function FinanceOverview() {
                     <td className="border px-2 py-1">{p.categoryName || p.categoryId}</td>
                   </tr>
                 ))}
-                {plannedLists.overdue.length===0 && (
+                {(plannedLists.overdue || []).length===0 && (
                   <tr><td colSpan={6} className="border px-2 py-4 text-center text-gray-500">Нет данных</td></tr>
                 )}
               </tbody>

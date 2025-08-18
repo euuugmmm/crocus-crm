@@ -6,6 +6,13 @@ import { useTranslation } from "next-i18next";
 import InputMask from "react-input-mask-next";
 import { format, parse, isValid } from "date-fns";
 
+// новые импорты констант
+import { OPERATORS } from "@/lib/constants/operators";
+import {
+  INTERNAL_STATUS_KEYS,
+  type StatusKey,
+} from "@/lib/constants/statuses";
+
 export interface Tourist {
   name: string;
   dob: string;
@@ -36,7 +43,7 @@ export interface OlimpyaBookingValues {
   nettoOlimpya?: number;
   internalNet?: number;
   paymentMethod?: string;
-  status?: string;
+  status?: StatusKey;
 
   commissionO?: number;
   overCommission?: number;
@@ -51,8 +58,11 @@ export interface OlimpyaBookingValues {
   agentName?: string;
   agentAgency?: string;
 
-  /** Флаг ручного режима — если true, ничего не пересчитываем. */
+  /** Флаг ручного режима — если true, суммы не пересчитываем автоматически. */
   financeManualOverride?: boolean;
+
+  /** Новое поле: флаг выплаты комиссии агенту */
+  commissionPaid?: boolean;
 }
 
 interface Props {
@@ -63,33 +73,26 @@ interface Props {
   agentAgency?: string;
 }
 
-const OPERATORS = [
-  { label: "TOCO TOUR RO", val: "TOCO TOUR RO", allowNet: true },
-  { label: "TOCO TOUR MD", val: "TOCO TOUR MD", allowNet: true },
-  { label: "KARPATEN", val: "KARPATEN", allowNet: false },
-  { label: "DERTOUR", val: "DERTOUR", allowNet: false },
-  { label: "CHRISTIAN", val: "CHRISTIAN", allowNet: false },
-  { label: "CORAL TRAVEL RO", val: "CORAL TRAVEL RO", allowNet: false },
-  { label: "JOIN UP RO", val: "JOIN UP RO", allowNet: false },
-  { label: "ANEX TOUR RO", val: "ANEX TOUR RO", allowNet: false },
-];
-
 const BASES = [
   { label: "Игорь", val: "igor" },
   { label: "Евгений", val: "evgeniy" },
   { label: "Crocus", val: "crocus" },
 ];
 
-const STATUS_OPTIONS = [
-  { label: "Новая", val: "new" },
-  { label: "Заведено DMC", val: "created_dmc" },
-  { label: "Заведено Toco", val: "created_toco" },
-  { label: "Подтверждено DMC", val: "confirmed_dmc" },
-  { label: "Подтверждено DMC + Авиа", val: "confirmed_dmc_flight" },
-  { label: "Подтверждено", val: "confirmed" },
-  { label: "Завершено", val: "finished" },
-  { label: "Отменено", val: "cancelled" },
-];
+// Локальные подписи для статусов (русские лейблы)
+const STATUS_LABELS: Record<StatusKey, string> = {
+  new: "Новая",
+  created_dmc: "Заведено DMC",
+  created_toco: "Заведено Toco",
+  awaiting_payment: "Ожидание оплаты",
+  paid: "Оплачено",
+  awaiting_confirm: "Ожидание подтверждения",
+  confirmed_dmc: "Подтверждено DMC",
+  confirmed_dmc_flight: "Подтверждено DMC + Авиа",
+  confirmed: "Подтверждено",
+  finished: "Завершено",
+  cancelled: "Отменено",
+};
 
 export default function BookingFormManagerOlimpya({
   initialValues,
@@ -116,7 +119,7 @@ export default function BookingFormManagerOlimpya({
   const [nettoOlimpya, setNettoOlimpya] = useState("");
   const [internalNet, setinternalNet] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("card");
-  const [status, setStatus] = useState("created_dmc");
+  const [status, setStatus] = useState<StatusKey>("created_dmc");
   const [comment, setComment] = useState("");
 
   const [tourists, setTourists] = useState<Tourist[]>([
@@ -136,13 +139,30 @@ export default function BookingFormManagerOlimpya({
   const [commissionEvgeniy, setCommissionEvgeniy] = useState(0);
   const [commission, setCommission] = useState(0);
 
+  // Новое поле: выплата комиссии
+  const [commissionPaid, setCommissionPaid] = useState<boolean>(false);
+
+  // контролим момент, когда initialValues действительно применены
+  const [hydrated, setHydrated] = useState(false);
+
+  // утилита безопасного преобразования в число
+  const toNum = (x: any) => {
+    const v = typeof x === "string" ? x.trim() : x;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   // Ручной режим + «касался ли пользователь сумм»
   const [financeManual, setFinanceManual] = useState<boolean>(false);
   const [manualTouched, setManualTouched] = useState<boolean>(false);
 
+  // Активен ли реально ручной режим (только при плательщике "Агент")
+  const manualActive = payerMode === "agent" && financeManual;
+
   // Подтягиваем initialValues
   useEffect(() => {
     if (!initialValues) return;
+
     setBase(initialValues.baseType || "igor");
     setOperator(initialValues.operator || "");
     setRegion(initialValues.region || "");
@@ -159,7 +179,7 @@ export default function BookingFormManagerOlimpya({
     setNettoOlimpya(String(initialValues.nettoOlimpya ?? ""));
     setinternalNet(String(initialValues.internalNet ?? ""));
     setPaymentMethod(initialValues.paymentMethod || "card");
-    setStatus(initialValues.status || "created_dmc");
+    setStatus((initialValues.status as StatusKey) || "created_dmc");
     setComment(initialValues.comment || "");
     setTourists(
       Array.isArray(initialValues.tourists) && initialValues.tourists.length
@@ -175,27 +195,54 @@ export default function BookingFormManagerOlimpya({
         ? initialValues.tourists[0].name
         : "";
     if (pv) {
-      if (pv === (agentName || "")) { setPayerMode("agent"); setCustomPayerName(""); }
-      else if (firstTouristName && pv === firstTouristName) { setPayerMode("first"); setCustomPayerName(""); }
-      else { setPayerMode("custom"); setCustomPayerName(pv); }
-    } else { setPayerMode("first"); setCustomPayerName(""); }
+      if (pv === (agentName || "")) {
+        setPayerMode("agent");
+        setCustomPayerName("");
+      } else if (firstTouristName && pv === firstTouristName) {
+        setPayerMode("first");
+        setCustomPayerName("");
+      } else {
+        setPayerMode("custom");
+        setCustomPayerName(pv);
+      }
+    } else {
+      setPayerMode("first");
+      setCustomPayerName("");
+    }
 
     // Финансы из initialValues (без пересчёта)
-    if (typeof initialValues.commissionO === "number") setCommissionO(initialValues.commissionO);
-    if (typeof initialValues.overCommission === "number") setOverCommission(initialValues.overCommission);
-    if (typeof initialValues.realCommission === "number") setRealCommission(initialValues.realCommission);
-    if (typeof initialValues.commissionIgor === "number") setCommissionIgor(initialValues.commissionIgor);
-    if (typeof initialValues.commissionEvgeniy === "number") setCommissionEvgeniy(initialValues.commissionEvgeniy);
-    if (typeof initialValues.commission === "number") setCommission(initialValues.commission);
+    setCommissionO(toNum(initialValues.commissionO));
+    setOverCommission(toNum(initialValues.overCommission));
+    setRealCommission(toNum(initialValues.realCommission));
+    setCommissionIgor(toNum(initialValues.commissionIgor));
+    setCommissionEvgeniy(toNum(initialValues.commissionEvgeniy));
+    setCommission(toNum(initialValues.commission));
 
-    // ВАЖНО: читаем флаг из БД и не сбрасываем его нигде автоматически
+    // Новое поле
+    setCommissionPaid(!!initialValues.commissionPaid);
+
+    // флаг ручного режима из БД
     setFinanceManual(!!initialValues.financeManualOverride);
+    // пользователь ещё не правил суммы руками в этой сессии
     setManualTouched(false);
+
+    // разрешаем автопересчёт после первичной инициализации
+    setHydrated(true);
   }, [initialValues, agentName]);
 
-  // Автопересчёт — только если НЕТ ручного режима и пользователь ещё не правил суммы
+  // Если ручной режим больше не активен (переключили плательщика или сняли галку),
+  // снимаем "след" ручного редактирования, чтобы автопересчёт мог снова работать.
   useEffect(() => {
-    if (financeManual || manualTouched) return;
+    if (!manualActive && manualTouched) setManualTouched(false);
+  }, [manualActive, manualTouched]);
+
+  // Автопересчёт — только если:
+  // 1) уже прогидратилось (подтянули initialValues),
+  // 2) ручной режим НЕ активен,
+  // 3) пользователь ещё не правил суммы руками в этой сессии.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (manualActive || manualTouched) return;
 
     const bc = parseFloat(bruttoClient) || 0;
     const no = parseFloat(nettoOlimpya) || 0;
@@ -205,7 +252,8 @@ export default function BookingFormManagerOlimpya({
     const real = bc - nf;
     const over = no - nf;
 
-    let ig = 0, ev = 0;
+    let ig = 0,
+      ev = 0;
     if (base === "igor") {
       ig = O + Math.max(0, over) * 0.3;
       ev = Math.max(0, over) * 0.7;
@@ -226,14 +274,23 @@ export default function BookingFormManagerOlimpya({
     setCommissionIgor(rnd(ig));
     setCommissionEvgeniy(rnd(ev));
     setCommission(rnd(realR * 0.9));
-  }, [bruttoClient, nettoOlimpya, internalNet, base, financeManual, manualTouched]);
+  }, [
+    hydrated,
+    base,
+    bruttoClient,
+    nettoOlimpya,
+    internalNet,
+    manualActive,
+    manualTouched,
+  ]);
 
   const parseDMYLocal = (s: string) => {
     const p = parse(s, "dd.MM.yyyy", new Date());
     return isValid(p) ? p : new Date(s);
   };
   const age = (dob: string) => {
-    const b = parseDMYLocal(dob), n = new Date();
+    const b = parseDMYLocal(dob),
+      n = new Date();
     let a = n.getFullYear() - b.getFullYear();
     if (n < new Date(b.setFullYear(b.getFullYear() + a))) a--;
     return a;
@@ -255,8 +312,20 @@ export default function BookingFormManagerOlimpya({
   );
 
   const addTourist = () =>
-    setTourists((t) => [...t, { name: "", dob: "", passportNumber: "", passportValidUntil: "", nationality: "", hasEUDoc: false, phone: "" }]);
-  const delTourist = (idx: number) => setTourists((t) => t.filter((_, i) => i !== idx));
+    setTourists((t) => [
+      ...t,
+      {
+        name: "",
+        dob: "",
+        passportNumber: "",
+        passportValidUntil: "",
+        nationality: "",
+        hasEUDoc: false,
+        phone: "",
+      },
+    ]);
+  const delTourist = (idx: number) =>
+    setTourists((t) => t.filter((_, i) => i !== idx));
   const chTourist = (idx: number, f: keyof Tourist, v: any) =>
     setTourists((t) => t.map((tr, i) => (i === idx ? { ...tr, [f]: v } : tr)));
 
@@ -295,7 +364,7 @@ export default function BookingFormManagerOlimpya({
       paymentMethod,
       status,
 
-      // Сохраняем РОВНО введённые цифры:
+      // Сохраняем РОВНО введённые/показанные цифры:
       commissionO,
       overCommission,
       realCommission,
@@ -309,16 +378,19 @@ export default function BookingFormManagerOlimpya({
       agentName,
       agentAgency,
 
-      // Сохраняем флаг — больше нигде его не сбрасываем автоматически
       financeManualOverride: financeManual,
+      commissionPaid, // новое поле
     });
   }
 
   // Редактировать суммы можно только при «Агент» и включённом флаге
-  const manualMode = payerMode === "agent" && financeManual;
+  const manualMode = manualActive;
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 rounded-lg shadow">
+    <form
+      onSubmit={handleSubmit}
+      className="space-y-6 bg-white p-6 rounded-lg shadow"
+    >
       <div className="p-4 bg-gray-100 rounded-lg border space-y-4">
         <h2 className="text-lg font-semibold">Информация о заявке</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
@@ -356,8 +428,17 @@ export default function BookingFormManagerOlimpya({
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">База клиента</label>
-          <select className="w-full border rounded p-2" value={base} onChange={(e) => setBase(e.target.value as any)} required>
-            {BASES.map((b) => (<option key={b.val} value={b.val}>{b.label}</option>))}
+          <select
+            className="w-full border rounded p-2"
+            value={base}
+            onChange={(e) => setBase(e.target.value as any)}
+            required
+          >
+            {BASES.map((b) => (
+              <option key={b.val} value={b.val}>
+                {b.label}
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -366,14 +447,28 @@ export default function BookingFormManagerOlimpya({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Оператор</label>
-          <select className="w-full border rounded p-2" value={operator} onChange={(e) => setOperator(e.target.value)} required>
+          <select
+            className="w-full border rounded p-2"
+            value={operator}
+            onChange={(e) => setOperator(e.target.value)}
+            required
+          >
             <option value="">— выберите —</option>
-            {OPERATORS.map((o) => (<option key={o.val} value={o.val}>{o.label}</option>))}
+            {OPERATORS.map((o) => (
+              <option key={o.val} value={o.val}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </div>
         <div className="md:col-span-1">
           <label className="block font-medium">Номер у оператора/поставщика</label>
-          <input className="w-full border rounded p-2" value={supplierBookingNumber} onChange={(e) => setSupplierBookingNumber(e.target.value)} placeholder="например, TOCO-123456" />
+          <input
+            className="w-full border rounded p-2"
+            value={supplierBookingNumber}
+            onChange={(e) => setSupplierBookingNumber(e.target.value)}
+            placeholder="например, TOCO-123456"
+          />
         </div>
       </div>
 
@@ -381,11 +476,21 @@ export default function BookingFormManagerOlimpya({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Направление</label>
-          <input className="w-full border rounded p-2" value={region} onChange={(e) => setRegion(e.target.value)} required />
+          <input
+            className="w-full border rounded p-2"
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            required
+          />
         </div>
         <div>
           <label className="block font-medium">Отель</label>
-          <input className="w-full border rounded p-2" value={hotel} onChange={(e) => setHotel(e.target.value)} required />
+          <input
+            className="w-full border rounded p-2"
+            value={hotel}
+            onChange={(e) => setHotel(e.target.value)}
+            required
+          />
         </div>
       </div>
 
@@ -393,15 +498,27 @@ export default function BookingFormManagerOlimpya({
       <div className="grid grid-cols-3 gap-4">
         <div>
           <label className="block font-medium">Город вылета</label>
-          <input className="w-full border rounded p-2" value={departureCity} onChange={(e) => setDepartureCity(e.target.value)} />
+          <input
+            className="w-full border rounded p-2"
+            value={departureCity}
+            onChange={(e) => setDepartureCity(e.target.value)}
+          />
         </div>
         <div>
           <label className="block font-medium">Город прилёта</label>
-          <input className="w-full border rounded p-2" value={arrivalCity} onChange={(e) => setArrivalCity(e.target.value)} />
+          <input
+            className="w-full border rounded p-2"
+            value={arrivalCity}
+            onChange={(e) => setArrivalCity(e.target.value)}
+          />
         </div>
         <div>
           <label className="block font-medium">Номер рейса</label>
-          <input className="w-full border rounded p-2" value={flightNumber} onChange={(e) => setFlightNumber(e.target.value)} />
+          <input
+            className="w-full border rounded p-2"
+            value={flightNumber}
+            onChange={(e) => setFlightNumber(e.target.value)}
+          />
         </div>
       </div>
 
@@ -420,64 +537,147 @@ export default function BookingFormManagerOlimpya({
       {/* Туристы */}
       <h3 className="text-lg font-semibold">Туристы</h3>
       {tourists.map((t, i) => (
-        <div key={i} className="relative border p-4 rounded-lg bg-white mb-4 shadow-sm">
+        <div
+          key={i}
+          className="relative border p-4 rounded-lg bg-white mb-4 shadow-sm"
+        >
           {tourists.length > 1 && (
-            <button type="button" onClick={() => delTourist(i)} className="absolute top-2 right-2 text-red-500">🗑</button>
+            <button
+              type="button"
+              onClick={() => delTourist(i)}
+              className="absolute top-2 right-2 text-red-500"
+            >
+              🗑
+            </button>
           )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <input placeholder="ФИО" required value={t.name} onChange={(e) => chTourist(i, "name", e.target.value)} className="border rounded p-2" />
+            <input
+              placeholder="ФИО"
+              required
+              value={t.name}
+              onChange={(e) => chTourist(i, "name", e.target.value)}
+              className="border rounded p-2"
+            />
             {renderMaskedInput(t.dob, (v) => chTourist(i, "dob", v))}
-            <input placeholder="Паспорт №" value={t.passportNumber} onChange={(e) => chTourist(i, "passportNumber", e.target.value)} className="border rounded p-2" />
-            {renderMaskedInput(t.passportValidUntil, (v) => chTourist(i, "passportValidUntil", v))}
-            <input placeholder="Гражданство" value={t.nationality} onChange={(e) => chTourist(i, "nationality", e.target.value)} className="border rounded p-2" />
+            <input
+              placeholder="Паспорт №"
+              value={t.passportNumber}
+              onChange={(e) => chTourist(i, "passportNumber", e.target.value)}
+              className="border rounded p-2"
+            />
+            {renderMaskedInput(
+              t.passportValidUntil,
+              (v) => chTourist(i, "passportValidUntil", v)
+            )}
+            <input
+              placeholder="Гражданство"
+              value={t.nationality}
+              onChange={(e) => chTourist(i, "nationality", e.target.value)}
+              className="border rounded p-2"
+            />
             <label className="flex items-center space-x-2">
-              <input type="checkbox" checked={t.hasEUDoc} onChange={(e) => chTourist(i, "hasEUDoc", e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={t.hasEUDoc}
+                onChange={(e) => chTourist(i, "hasEUDoc", e.target.checked)}
+              />
               <span>EU-документ</span>
             </label>
           </div>
         </div>
       ))}
-      <button type="button" onClick={addTourist} className="text-blue-600 text-sm">+ Добавить туриста</button>
+      <button
+        type="button"
+        onClick={addTourist}
+        className="text-blue-600 text-sm"
+      >
+        + Добавить туриста
+      </button>
 
       {/* Финансы (ввод) */}
       <h3 className="text-lg font-semibold mt-4">Финансовые данные</h3>
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block font-medium">Brutto клиента (€)</label>
-          <input type="number" step="0.01" className="w-full border rounded p-2" value={bruttoClient} onChange={(e) => setBruttoClient(e.target.value)} required />
+          <input
+            type="number"
+            step="0.01"
+            className="w-full border rounded p-2"
+            value={bruttoClient}
+            onChange={(e) => setBruttoClient(e.target.value)}
+            required
+          />
         </div>
         <div>
           <label className="block font-medium">Netto Олимпия (€)</label>
-          <input type="number" step="0.01" className="w-full border rounded p-2" value={nettoOlimpya} onChange={(e) => setNettoOlimpya(e.target.value)} />
+          <input
+            type="number"
+            step="0.01"
+            className="w-full border rounded p-2"
+            value={nettoOlimpya}
+            onChange={(e) => setNettoOlimpya(e.target.value)}
+          />
         </div>
       </div>
       <div>
         <label className="block font-medium">Netto Fact (€)</label>
-        <input type="number" step="0.01" className="w-full border rounded p-2" value={internalNet} onChange={(e) => setinternalNet(e.target.value)} />
+        <input
+          type="number"
+          step="0.01"
+          className="w-full border rounded p-2"
+          value={internalNet}
+          onChange={(e) => setinternalNet(e.target.value)}
+        />
       </div>
 
-      {/* Плательщик + ручной режим */}
+      {/* Плательщик + ручной режим + чекбокс "Комиссия выплачена" */}
       <div className="md:col-span-2">
         <label className="block font-medium">Плательщик</label>
         <div className="flex flex-col gap-2 mt-1">
           <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="payerMode" value="first" checked={payerMode === "first"} onChange={() => setPayerMode("first")} />
+            <input
+              type="radio"
+              name="payerMode"
+              value="first"
+              checked={payerMode === "first"}
+              onChange={() => setPayerMode("first")}
+            />
             <span>Первый турист ({tourists[0]?.name || "—"})</span>
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="payerMode" value="agent" checked={payerMode === "agent"} onChange={() => setPayerMode("agent")} />
+            <input
+              type="radio"
+              name="payerMode"
+              value="agent"
+              checked={payerMode === "agent"}
+              onChange={() => setPayerMode("agent")}
+            />
             <span>Агент ({agentName || "—"})</span>
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="payerMode" value="custom" checked={payerMode === "custom"} onChange={() => setPayerMode("custom")} />
+            <input
+              type="radio"
+              name="payerMode"
+              value="custom"
+              checked={payerMode === "custom"}
+              onChange={() => setPayerMode("custom")}
+            />
             <span>Другое</span>
           </label>
         </div>
 
         <input
           className="w-full border rounded p-2 mt-2"
-          value={payerMode === "agent" ? (agentName || "") : payerMode === "first" ? (tourists[0]?.name || "") : customPayerName}
-          onChange={(e) => { if (payerMode === "custom") setCustomPayerName(e.target.value); }}
+          value={
+            payerMode === "agent"
+              ? agentName || ""
+              : payerMode === "first"
+              ? tourists[0]?.name || ""
+              : customPayerName
+          }
+          onChange={(e) => {
+            if (payerMode === "custom") setCustomPayerName(e.target.value);
+          }}
           placeholder="Имя плательщика"
           disabled={payerMode !== "custom"}
         />
@@ -492,45 +692,124 @@ export default function BookingFormManagerOlimpya({
             <span>Ручное редактирование финансов (агентский платёж)</span>
           </label>
         )}
+
+        {/* Комиссия выплачена — ниже выбора плательщика */}
+        <div className="flex items-center space-x-2 mt-3">
+          <input
+            type="checkbox"
+            checked={!!commissionPaid}
+            onChange={(e) => setCommissionPaid(e.target.checked)}
+          />
+          <label>Комиссия агенту выплачена</label>
+        </div>
       </div>
 
       {/* Комиссии */}
       <div className="p-3 bg-gray-50 border rounded text-sm space-y-2">
         <div className="font-medium">Комиссии</div>
 
-        <RowField label="Комиссия Олимпия (O)" value={commissionO} editable={manualMode} onChange={(v) => { markManual(); setCommissionO(v); }} />
-        <RowField label="Оверкомиссия"          value={overCommission} editable={manualMode} onChange={(v) => { markManual(); setOverCommission(v); }} />
-        <RowField label="Комиссия реальная"     value={realCommission} editable={manualMode} onChange={(v) => { markManual(); setRealCommission(v); }} />
-        <RowField label="Игорю"                  value={commissionIgor} editable={manualMode} onChange={(v) => { markManual(); setCommissionIgor(v); }} />
-        <RowField label="Евгению"               value={commissionEvgeniy} editable={manualMode} onChange={(v) => { markManual(); setCommissionEvgeniy(v); }} />
-        <RowField label="Комиссия (после -10%)" value={commission} editable={manualMode} onChange={(v) => { markManual(); setCommission(v); }} />
+        <RowField
+          label="Комиссия Олимпия (O)"
+          value={commissionO}
+          editable={manualMode}
+          onChange={(v) => {
+            markManual();
+            setCommissionO(v);
+          }}
+        />
+        <RowField
+          label="Оверкомиссия"
+          value={overCommission}
+          editable={manualMode}
+          onChange={(v) => {
+            markManual();
+            setOverCommission(v);
+          }}
+        />
+        <RowField
+          label="Комиссия реальная"
+          value={realCommission}
+          editable={manualMode}
+          onChange={(v) => {
+            markManual();
+            setRealCommission(v);
+          }}
+        />
+        <RowField
+          label="Игорю"
+          value={commissionIgor}
+          editable={manualMode}
+          onChange={(v) => {
+            markManual();
+            setCommissionIgor(v);
+          }}
+        />
+        <RowField
+          label="Евгению"
+          value={commissionEvgeniy}
+          editable={manualMode}
+          onChange={(v) => {
+            markManual();
+            setCommissionEvgeniy(v);
+          }}
+        />
+        <RowField
+          label="Комиссия (после -10%)"
+          value={commission}
+          editable={manualMode}
+          onChange={(v) => {
+            markManual();
+            setCommission(v);
+          }}
+        />
 
-        {!financeManual && !manualTouched && (
+        {!manualMode && !manualTouched && (
           <div className="text-xs text-gray-500">
-            Значения рассчитываются автоматически на основе Brutto/Netto и базы. Чтобы изменить суммы вручную,
-            выберите плательщика «Агент» и включите галочку «Ручное редактирование финансов».
+            Значения рассчитываются автоматически на основе Brutto/Netto и базы.
+            Чтобы изменить суммы вручную, выберите плательщика «Агент» и включите галочку «Ручное редактирование финансов».
           </div>
         )}
       </div>
 
+      {/* Статус */}
       <div>
         <label className="block font-medium">Статус заявки</label>
-        <select className="w-full border rounded p-2" value={status} onChange={(e) => setStatus(e.target.value)}>
-          {STATUS_OPTIONS.map((s) => (<option key={s.val} value={s.val}>{s.label}</option>))}
+        <select
+          className="w-full border rounded p-2"
+          value={status}
+          onChange={(e) => setStatus(e.target.value as StatusKey)}
+        >
+          {INTERNAL_STATUS_KEYS.map((key) => (
+            <option key={key} value={key}>
+              {STATUS_LABELS[key]}
+            </option>
+          ))}
         </select>
       </div>
 
+      {/* Комментарий */}
       <div>
         <label className="block font-medium">Комментарий при создании</label>
-        <textarea className="w-full border rounded p-2" value={comment} onChange={(e) => setComment(e.target.value)} />
+        <textarea
+          className="w-full border rounded p-2"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+        />
       </div>
 
       <div className="flex justify-between mt-4">
-        <button type="submit" className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+        <button
+          type="submit"
+          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+        >
           {initialValues ? "Сохранить" : "Создать"}
         </button>
 
-        <button type="button" className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600" onClick={() => window.history.back()}>
+        <button
+          type="button"
+          className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+          onClick={() => window.history.back()}
+        >
           Отмена
         </button>
       </div>

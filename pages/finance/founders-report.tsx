@@ -457,7 +457,7 @@ export default function FoundersReportPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button onClick={refreshCache} disabled={cacheRefreshing} className="inline-flex items-center gap-2">
+              <Button onClick={refreshCache} disabled={cacheRefreshing} className="h-8 px-3 text-xs bg-blue-600 hover:bg-blue-700 text-white">
                 <RotateCcw className={`w-4 h-4 ${cacheRefreshing ? "animate-spin" : ""}`} />
                 {cacheRefreshing ? "Обновляю кэш…" : "Обновить кэш"}
               </Button>

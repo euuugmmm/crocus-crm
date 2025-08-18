@@ -2,7 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { adminDb, adminFs } from "@/lib/server/firebaseAdmin";
 
-// helpers
+// ===== helpers =====
 const toNum = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const toISO = (d: Date) => {
@@ -10,9 +10,47 @@ const toISO = (d: Date) => {
   return z.toISOString().slice(0, 10);
 };
 
+const tsToDate = (v: any): Date | null =>
+  v?.toDate ? v.toDate() : (typeof v === "string" && !isNaN(Date.parse(v)) ? new Date(v) : null);
+
+const parseDMY = (s?: string | null): Date | null => {
+  if (!s) return null;
+  const parts = String(s).trim().split(".");
+  if (parts.length !== 3) return null;
+  const [dd, mm, yyyy] = parts;
+  const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  return isNaN(+d) ? null : d;
+};
+
+// «дата заявки» → ISO (YYYY-MM-DD)
+const bookingCreatedDateISO = (b: any): string => {
+  const ts =
+    tsToDate(b?.createdAt) ||
+    tsToDate(b?.created_at) ||
+    tsToDate(b?.createdAtStr) ||
+    tsToDate(b?.created_date);
+  if (ts) return toISO(ts);
+
+  const dmY =
+    parseDMY(b?.createdDate) ||
+    parseDMY(b?.created_date);
+  if (dmY) return toISO(dmY);
+
+  return toISO(new Date());
+};
+
+// Fallback completion по статусу
+const completionFromStatus = (status?: string): number => {
+  const s = String(status || "").toLowerCase();
+  if (["created_toco","created_dmc","confirmed_dmc", "confirmed_dmc_flight", "confirmed", "finished"].includes(s)) return 1;
+  if (["cancelled"].includes(s)) return 0;
+  return 0; // new/created_*/awaiting_* — не включаем
+};
+
+// ===== types =====
 type OwnerMove = {
   kind: "booking_income" | "owner_tx";
-  date: string;
+  date: string; // по умолчанию дата заявки
   side: "income" | "expense";
   baseAmount: number;
   igor: number;
@@ -22,9 +60,14 @@ type OwnerMove = {
   bookingNumber?: string;
   txId?: string;
 
-  /** Доп. мета (идёт в кэш; фронт использует для разрезов и фильтров) */
   operator?: string | null;
-  completion?: number; // 0..1 — доля закрытия заявки по факту оплат
+  completion?: number;
+
+  // 👉 новые вспомогательные даты
+  dateCreated?: string | null;
+  dateCheckIn?: string | null;
+  dateCheckOut?: string | null;
+  dateLastOrder?: string | null;
 
   accountName?: string | null;
   categoryName?: string | null;
@@ -34,7 +77,7 @@ type OwnerMove = {
 
 type Booking = {
   id: string;
-  bookingType?: string; // "olimpya_base" | "subagent" | ...
+  bookingType?: string;
   baseType?: "igor" | "evgeniy" | "split50";
   createdAt?: any;
   bookingNumber?: string;
@@ -56,28 +99,24 @@ type Booking = {
 type OrderDoc = {
   id: string;
   txId: string;
-  date: string;    // YYYY-MM-DD
+  date: string;
   side: "income" | "expense";
   bookingId: string;
-  baseAmount: number; // EUR
-  status: string;     // posted
+  baseAmount: number;
+  status: string;
 };
 
 type TxDoc = {
   id: string;
-  date: string;          // YYYY-MM-DD
+  date: string;
   side: "income" | "expense";
-  status?: string;       // actual/reconciled/planned
-  baseAmount: number;    // EUR (канонически положительный)
+  status?: string;
+  baseAmount: number;
   accountName?: string | null;
   categoryName?: string | null;
   counterpartyName?: string | null;
   note?: string | null;
-
-  // legacy / hints
   ownerWho?: "igor" | "evgeniy" | "split50" | "crocus" | null;
-
-  // точные суммы сплита (для расходов)
   ownerIgorEUR?: number;
   ownerEvgeniyEUR?: number;
 };
@@ -125,6 +164,7 @@ function splitAmount(
   }));
 }
 
+// ===== handler =====
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     res.status(405).json({ ok: false, error: "Method Not Allowed" });
@@ -132,7 +172,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // параллельные чтения
     const [ordersSnap, bookingsSnap, txSnap, ownersCfg] = await Promise.all([
       adminDb.collection("finance_orders").where("status", "==", "posted").get(),
       adminDb.collection("bookings").get(),
@@ -140,7 +179,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       loadOwnersServer(),
     ]);
 
-    // ---- ORDERS → агрегаты по заявкам (факт)
+    // ORDERS → агрегаты по заявкам (факт)
     const orders: OrderDoc[] = ordersSnap.docs.map(d => {
       const v = d.data() as any;
       const side: "income" | "expense" = v.side === "expense" ? "expense" : "income";
@@ -152,7 +191,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         bookingId: String(v.bookingId || ""),
         baseAmount: Number(v.baseAmount || 0),
         status: String(v.status || ""),
-      } as OrderDoc;
+      };
     });
 
     const factByBooking = new Map<string, { inEUR: number; outEUR: number; lastDate?: string }>();
@@ -160,22 +199,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const prev = factByBooking.get(o.bookingId) || { inEUR: 0, outEUR: 0, lastDate: undefined as string | undefined };
       if (o.side === "income") prev.inEUR += Math.abs(o.baseAmount);
       else prev.outEUR += Math.abs(o.baseAmount);
-      if (!prev.lastDate || o.date > prev.lastDate) prev.lastDate = o.date;
+      if (!prev.lastDate || o.date > prev.lastDate) prev.lastDate = o.date; // для dateLastOrder
       factByBooking.set(o.bookingId, prev);
     }
 
-    // ---- BOOKINGS
+    // BOOKINGS
     const bookings: Booking[] = bookingsSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
 
-    // распределение Crocus для заявки (НЕ меняем заявки; только читаем)
     const splitForBooking = (b: Booking) => {
       const brutto = toNum(b.bruttoClient);
       const netCrocus = toNum(b.internalNet);
       const netOlimp = toNum(b.nettoOlimpya) || netCrocus;
 
-      const baseCommission = toNum((b as any).realCommission) || toNum((b as any).commission) || (brutto - netCrocus);
+      const baseCommission =
+        toNum((b as any).realCommission) ||
+        toNum((b as any).commission) ||
+        (brutto - netCrocus);
 
-      // ── РУЧНЫЕ СУММЫ — это финал (никаких нормализаций)
       const hasManual =
         !!(b as any).financeManualOverride ||
         toNum((b as any).commissionIgor) !== 0 ||
@@ -188,24 +228,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return { brutto, netCrocus, netOlimp, crocusAmount, Igor, Evgeniy };
       }
 
-      // olimpya_base → комиссия
       const crocusAmount =
         b.bookingType === "olimpya_base"
           ? baseCommission
           : (brutto - netCrocus);
 
-      // subagent → 50/50
       if (b.bookingType && b.bookingType !== "olimpya_base") {
         const half = +(crocusAmount / 2).toFixed(2);
         const rest = +(crocusAmount - half).toFixed(2);
         return { brutto, netCrocus, netOlimp, crocusAmount: +crocusAmount.toFixed(2), Igor: half, Evgeniy: rest };
       }
 
-      // baseType
       if (b.baseType === "igor")     return { brutto, netCrocus, netOlimp, crocusAmount: +crocusAmount.toFixed(2), Igor: +crocusAmount.toFixed(2), Evgeniy: 0 };
       if (b.baseType === "evgeniy")  return { brutto, netCrocus, netOlimp, crocusAmount: +crocusAmount.toFixed(2), Igor: 0, Evgeniy: +crocusAmount.toFixed(2) };
 
-      // fallback: конфиг владельцев
       const parts =
         b.bookingType === "olimpya_base"
           ? splitAmount(baseCommission, ownersCfg, b.owners)
@@ -225,31 +261,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
     };
 
-    // доходы учредителей по заявкам (факт из ордеров)
+    // Доходы учредителей по заявкам
     const movesB: OwnerMove[] = [];
     for (const b of bookings) {
       const { brutto, netCrocus, crocusAmount, Igor, Evgeniy } = splitForBooking(b);
       if (!Number.isFinite(crocusAmount)) continue;
 
       const fb = factByBooking.get(b.id) || { inEUR: 0, outEUR: 0, lastDate: undefined };
+
       const ratioIn  = brutto     > 0 ? fb.inEUR  / brutto     : (netCrocus > 0 ? fb.outEUR / netCrocus : 0);
       const ratioOut = netCrocus  > 0 ? fb.outEUR / netCrocus  : (brutto    > 0 ? fb.inEUR  / brutto    : 0);
-      const completion = clamp01(Math.min(ratioIn || 0, ratioOut || 0)); // 1.0 = «завершена»
+      const completionOrders = clamp01(Math.min(ratioIn || 0, ratioOut || 0));
+
+      // fallback по статусу
+      const completionStatus = completionFromStatus((b as any).status);
+      const completion = Math.max(completionOrders, completionStatus);
 
       const inc = +((crocusAmount || 0) * completion).toFixed(2);
       const ig  = +((Igor         || 0) * completion).toFixed(2);
       const ev  = +((Evgeniy      || 0) * completion).toFixed(2);
       if (Math.abs(inc) < 0.01 && Math.abs(ig) < 0.01 && Math.abs(ev) < 0.01) continue;
 
-      let when = fb.lastDate;
-      if (!when) {
-        const d = (b as any).createdAt?.toDate?.() as Date | undefined;
-        when = d ? toISO(d) : toISO(new Date());
-      }
+      // базовые даты
+      const createdISO = bookingCreatedDateISO(b);
+      const checkInISO  = (() => { const d = parseDMY((b as any).checkIn);  return d ? toISO(d) : null; })();
+      const checkOutISO = (() => { const d = parseDMY((b as any).checkOut); return d ? toISO(d) : null; })();
+      const lastOrderISO = fb.lastDate || null;
 
       movesB.push({
         kind: "booking_income",
-        date: when!,
+        date: createdISO, // по умолчанию считаем по дате заявки
         side: "income",
         baseAmount: inc,
         igor: ig,
@@ -257,12 +298,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         bookingId: b.id,
         bookingNumber: (b as any).bookingNumber || b.id,
         operator: (b as any).operator || null,
-        completion, // 0..1
+        completion,
+
+        // мета-даты для фронта
+        dateCreated: createdISO,
+        dateCheckIn: checkInISO,
+        dateCheckOut: checkOutISO,
+        dateLastOrder: lastOrderISO,
+
         note: `Доход по заявке ${(b as any).bookingNumber || b.id}`,
       });
     }
 
-    // ---- TRANSACTIONS → прочие движения (ownerWho / выплаты / точные суммы)
+    // TRANSACTIONS → прочие движения
     const txs: TxDoc[] = txSnap.docs
       .map(d => {
         const v = d.data() as any;
@@ -300,7 +348,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let ig = 0, ev = 0;
       let pushed = false;
 
-      // точные суммы — ПРИОРИТЕТ
       const igExact = Number(t.ownerIgorEUR || 0);
       const evExact = Number(t.ownerEvgeniyEUR || 0);
       if (t.side === "expense" && (igExact > 0 || evExact > 0)) {
@@ -323,7 +370,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      // legacy ownerWho
       const ow = t.ownerWho;
       if (ow) {
         const sign = t.side === "income" ? +1 : -1;
@@ -333,7 +379,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         pushed = true;
       }
 
-      // эвристика выплат
       if (!pushed && isOwnerPayout(t)) {
         const who =
           detectOwnerFromText(t.note) ||

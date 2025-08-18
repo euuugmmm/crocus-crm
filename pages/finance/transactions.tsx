@@ -15,6 +15,8 @@ import {
   query,
   where,
   getDocs,
+  deleteDoc,
+  doc,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
@@ -134,10 +136,10 @@ const defaultFromISO = localISO(addDays(new Date(), -90)); // последние
 export default function FinanceTransactions() {
   const router = useRouter();
   const { user, isManager, isSuperManager, isAdmin } = useAuth();
-const canView = canViewFinance(
-  { isManager, isSuperManager, isAdmin },
-  { includeManager: true } // пока пускаем менеджеров
-);
+  const canView = canViewFinance(
+    { isManager, isSuperManager, isAdmin },
+    { includeManager: true } // пока пускаем менеджеров
+  );
   const canEdit = canView;
 
   // data
@@ -149,6 +151,7 @@ const canView = canViewFinance(
   const [bookingsAll, setBookingsAll] = useState<BookingFull[]>([]);
   const [orders, setOrders] = useState<OrderDoc[]>([]);
   const [bookingsLoaded, setBookingsLoaded] = useState(false);
+  const [plannedRaw, setPlannedRaw] = useState<any[]>([]);
 
   // UI: filters / modal / highlight
   const [f, setF] = useState({
@@ -218,6 +221,18 @@ const canView = canViewFinance(
       (err) => console.error("[transactions] onSnapshot error:", err)
     );
 
+    // плановые: только диапазон дат
+    const up2 = onSnapshot(
+      query(
+        collection(db, "finance_planned"),
+        where("date", ">=", from),
+        where("date", "<=", to),
+        orderBy("date", "desc")
+      ),
+      (s) => setPlannedRaw(s.docs.map(d => ({ id: d.id, ...(d.data() as any) }))),
+      (err) => console.error("[planned] onSnapshot error:", err)
+    );
+
     // ордера: только posted и только диапазон дат
     const uo = onSnapshot(
       query(
@@ -245,7 +260,7 @@ const canView = canViewFinance(
       (err) => console.error("[orders] onSnapshot error:", err)
     );
 
-    return () => { ua(); uc(); up(); uf(); ut(); uo(); };
+    return () => { ua(); uc(); up(); uf(); ut(); uo(); up2(); };
   }, [user, canView, f.dateFrom, f.dateTo]);
 
   /** лениво подтягиваем bookings только при открытии модалки (разово) */
@@ -268,11 +283,45 @@ const canView = canViewFinance(
     })();
   }, [modalOpen, bookingsLoaded]);
 
-  /** нормализованные транзакции */
+  /** нормализованные транзакции (факт) */
   const txs: TxRow[] = useMemo(
     () => rowsRaw.map((raw) => normalizeTx(raw, accounts, fxList)),
     [rowsRaw, accounts, fxList]
   );
+
+  /** плановые → TxRow (status = "planned"), показываем только непривязанные к факту */
+  const plannedTxs: TxRow[] = useMemo(() => {
+    return plannedRaw
+      .filter(p => !p.matchedTxId)
+      .map((p: any) => {
+        const side = (p.side === "income" ? "income" : "expense") as CategorySide;
+        const amount = Number(p.amount || 0);
+        const eur = Number(p.eurAmount || 0);
+        return {
+          id: `planned_${p.id}`,        // чтобы не пересекаться с факт id
+          date: String(p.date || ""),
+          side,
+          status: "planned",
+          accountId: p.accountId || "",
+          accountName: p.accountName || p.accountId || "—",
+          categoryId: p.categoryId || "",
+          categoryName: p.categoryName || p.categoryId || "—",
+          counterpartyName: p.counterpartyName || "—",
+          note: p.note || "",
+          amount,
+          currency: p.currency || "EUR",
+          baseAmount: eur,
+
+          // оригинальный id плановой записи — для удаления
+          plannedId: p.id,
+        } as any as TxRow; // расширили тип полем plannedId
+      });
+  }, [plannedRaw]);
+
+  /** все строки для таблицы: факт + план */
+  const txsAll: TxRow[] = useMemo(() => {
+    return [...txs, ...plannedTxs];
+  }, [txs, plannedTxs]);
 
   /** точные суммы по учредителям из raw (для бейджа и фильтра) */
   const foundersByTx = useMemo(() => {
@@ -359,7 +408,7 @@ const canView = canViewFinance(
   function classifyAlloc(t: TxRow): "booked_full" | "booked_part" | "founders" | "none" {
     const agg = ordersByTx.get(t.id) || { sum: 0, count: 0 };
     const bookedSum = Math.round(agg.sum * 100) / 100;
-    const total = Math.round(t.baseAmount * 100) / 100;
+    const total = Math.round((t.baseAmount || 0) * 100) / 100;
 
     const hasOrders = (agg.count || 0) > 0;
     const fullByBookings = hasOrders && bookedSum + 0.01 >= total;
@@ -368,12 +417,13 @@ const canView = canViewFinance(
     if (fullByBookings) return "booked_full";
     if (partByBookings) return "booked_part";
 
-    // учредители (legacy ownerWho или точные суммы)
-    const fz = foundersByTx.get(t.id);
-    const hasFoundersExact = !!fz && (fz.ig > 0 || fz.ev > 0);
-    const hasFoundersLegacy = t.side === "expense" && !!(t as any).ownerWho;
-
-    if (hasFoundersExact || hasFoundersLegacy) return "founders";
+    // учредители (legacy ownerWho или точные суммы) — только для факта
+    if (t.status !== "planned") {
+      const fz = foundersByTx.get(t.id);
+      const hasFoundersExact = !!fz && (fz.ig > 0 || fz.ev > 0);
+      const hasFoundersLegacy = (t.side as CategorySide) === "expense" && !!(t as any).ownerWho;
+      if (hasFoundersExact || hasFoundersLegacy) return "founders";
+    }
 
     return "none";
   }
@@ -384,7 +434,7 @@ const canView = canViewFinance(
     const dt = f.dateTo ? new Date(f.dateTo) : null;
     const q = f.search.trim().toLowerCase();
 
-    return txs
+    return txsAll
       .filter((t) => {
         if (f.accountId !== "all" && t.accountId !== f.accountId) return false;
         if (f.side !== "all" && t.side !== (f.side as CategorySide)) return false;
@@ -409,12 +459,13 @@ const canView = canViewFinance(
         return true;
       })
       .sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [txs, f, ordersByTx, foundersByTx]);
+  }, [txsAll, f, ordersByTx, foundersByTx]);
 
-  /** итоги */
+  /** итоги: считаем только ФАКТ (плановые пропускаем) */
   const totals = useMemo(() => {
     let inc = 0, exp = 0;
     for (const t of displayed) {
+      if (t.status === "planned") continue;
       if (t.side === "income") inc += t.baseAmount;
       else exp += t.baseAmount;
     }
@@ -443,7 +494,16 @@ const canView = canViewFinance(
   const onSaved = (id: string) => {
     router.replace({ pathname: router.pathname, query: { highlight: id } }, undefined, { shallow: true });
   };
+
+  // Удаление: различаем факт и план
   const removeTx = async (row: TxRow) => {
+    if (row.status === "planned") {
+      const plannedId = (row as any).plannedId || row.id.replace(/^planned_/, "");
+      if (!confirm("Удалить плановую транзакцию?")) return;
+      await deleteDoc(doc(db, "finance_planned", plannedId));
+      return;
+    }
+
     if (!confirm("Удалить транзакцию и её ордера?")) return;
     await removeTxWithOrders(row.id);
   };
@@ -701,18 +761,34 @@ const canView = canViewFinance(
                         ownerEvgeniyEUR={ownerEvgeniyEUR}
                       />
                     </td>
-                    <td className="border px-2 py-1 text-left align-top"
-                        style={{ maxWidth: 440, overflow: "hidden", display: "-webkit-box",
-                                WebkitLineClamp: 2, WebkitBoxOrient: "vertical", wordBreak: "break-word" }}
-                        title={t.note || ""}>
+                    <td
+                      className="border px-2 py-1 text-left align-top"
+                      style={{ maxWidth: 440, overflow: "hidden", display: "-webkit-box",
+                               WebkitLineClamp: 2, WebkitBoxOrient: "vertical", wordBreak: "break-word" }}
+                      title={t.note || ""}
+                    >
                       {t.note || "—"}
                     </td>
                     <td className="border px-2 py-1">
                       <div className="inline-flex gap-2">
                         {canEdit && (
                           <>
-                            <button className="h-7 px-2 border rounded hover:bg-gray-100" onClick={() => openEdit(t)} title="Редактировать">✏️</button>
-                            <button className="h-7 px-2 border rounded hover:bg-red-50" onClick={() => removeTx(t)} title="Удалить">🗑️</button>
+                            {t.status !== "planned" && (
+                              <button
+                                className="h-7 px-2 border rounded hover:bg-gray-100"
+                                onClick={() => openEdit(t)}
+                                title="Редактировать"
+                              >
+                                ✏️
+                              </button>
+                            )}
+                            <button
+                              className="h-7 px-2 border rounded hover:bg-red-50"
+                              onClick={() => removeTx(t)}
+                              title="Удалить"
+                            >
+                              🗑️
+                            </button>
                           </>
                         )}
                       </div>

@@ -18,6 +18,7 @@ import {
 import { db } from "@/firebaseConfig";
 
 type Currency = "EUR" | "RON" | "USD";
+
 type Account = {
   id: string;
   name: string;
@@ -27,19 +28,40 @@ type Account = {
   archived?: boolean;
 };
 
+// amount может быть числом (legacy) или объектом нового формата
+type TxAmount = number | { value: number; currency?: Currency };
+
 type Tx = {
   id: string;
   type: "in" | "out" | "transfer";
   status: "planned" | "actual" | "reconciled";
-  date: string;
-  amount: { value: number; currency: Currency };
-  baseAmount: number; // уже в EUR
-  accountId?: string;        // для in/out
-  fromAccountId?: string;    // для transfer
-  toAccountId?: string;      // для transfer
+  date?: string;
+  amount?: TxAmount;           // может быть числом или объектом
+  baseAmount?: number;         // EUR
+  accountId?: string;          // для in/out
+  fromAccountId?: string;      // для transfer
+  toAccountId?: string;        // для transfer
 };
 
 type FxDoc = { id: string; base: "EUR"; rates: Partial<Record<Currency, number>> };
+
+// ==== helpers: безопасное чтение сумм/валют + конвертации ====
+const n = (v: any) => Number(v ?? 0) || 0;
+const getAmountNumber = (a: TxAmount | undefined): number =>
+  typeof a === "number" ? a : n((a as any)?.value);
+
+const getAmountCurrency = (
+  a: TxAmount | undefined,
+  fallback: Currency
+): Currency => (typeof a === "number" ? fallback : ((a as any)?.currency || fallback));
+
+// локальный ISO для возможных мест, где нужно
+const localISO = (d = new Date()) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
 
 export default function FinanceAccounts() {
   const router = useRouter();
@@ -77,6 +99,7 @@ export default function FinanceAccounts() {
     return () => { unsubAcc(); unsubTx(); unsubFx(); };
   }, [user, canEdit, router]);
 
+  // FX helpers
   const eurFrom = (amount: number, ccy: Currency): number => {
     if (!amount) return 0;
     if (ccy === "EUR") return amount;
@@ -84,44 +107,86 @@ export default function FinanceAccounts() {
     if (!r || r <= 0) return 0;
     return amount / r;
   };
-
-const movementsByAccount = useMemo(() => {
-  const map = new Map<string, { amt: number; eur: number }>();
-  const add = (accId: string, deltaAmt: number, ccy: Currency, deltaEur: number) => {
-    const prev = map.get(accId) || { amt: 0, eur: 0 };
-    map.set(accId, { amt: prev.amt + deltaAmt, eur: prev.eur + deltaEur });
+  const ccyFromEur = (eur: number, ccy: Currency): number => {
+    if (!eur) return 0;
+    if (ccy === "EUR") return eur;
+    const r = fx?.rates?.[ccy];
+    if (!r || r <= 0) return 0;
+    return eur * r;
   };
 
-  for (const t of txs) {
-    if (t.type === "transfer") {
-      // списать со from, зачислить на to (в валюте каждого счёта факт хранится как значение amount.value в валюте операции;
-      // для простоты считаем, что импорт по одному счёту: amount.value относится к fromAccountId)
-      if (t.fromAccountId) {
-        add(t.fromAccountId, -Number(t.amount.value || 0), t.amount.currency, -Number(t.baseAmount || 0));
+  // быстрый индекс аккаунтов
+  const accIndex = useMemo(() => {
+    const m = new Map<string, Account>();
+    accounts.forEach(a => m.set(a.id, a));
+    return m;
+  }, [accounts]);
+
+  /**
+   * Агрегация движений по счетам.
+   * — Учитываем только actual/reconciled (planned не изменяют баланс).
+   * — Считаем дельты в EUR (надёжно), затем переводим в валюту конкретного счёта для поля "amt".
+   */
+  const movementsByAccount = useMemo(() => {
+    const map = new Map<string, { amt: number; eur: number }>();
+
+    const addEUR = (accId?: string, deltaEur?: number) => {
+      if (!accId || !deltaEur) return;
+      const prev = map.get(accId) || { amt: 0, eur: 0 };
+      const acc = accIndex.get(accId);
+      const accCcy: Currency = acc?.currency || "EUR";
+      const deltaAmtInAccCcy = ccyFromEur(deltaEur, accCcy);
+      map.set(accId, {
+        amt: prev.amt + deltaAmtInAccCcy,
+        eur: prev.eur + deltaEur,
+      });
+    };
+
+    for (const t of txs) {
+      // планы игнорируем
+      if (t.status === "planned") continue;
+
+      if (t.type === "transfer") {
+        // EUR суммы из baseAmount, иначе считаем из amount + валюты
+        const fromCcy = accIndex.get(t.fromAccountId || "")?.currency || "EUR";
+        const fallbackCcy = getAmountCurrency(t.amount, fromCcy as Currency);
+        const eurVal =
+          typeof t.baseAmount === "number"
+            ? t.baseAmount
+            : eurFrom(getAmountNumber(t.amount), fallbackCcy);
+
+        // списываем с from, зачисляем на to
+        if (t.fromAccountId) addEUR(t.fromAccountId, -eurVal);
+        if (t.toAccountId) addEUR(t.toAccountId, +eurVal);
+        continue;
       }
-      if (t.toAccountId) {
-        add(t.toAccountId, +Number(t.amount.value || 0), t.amount.currency, +Number(t.baseAmount || 0));
-      }
-      continue;
+
+      // in/out
+      const sign = t.type === "in" ? +1 : -1;
+      const accId = t.accountId;
+      const accCcy = accIndex.get(accId || "")?.currency || "EUR";
+      const txCcy = getAmountCurrency(t.amount, accCcy as Currency);
+
+      const eurVal =
+        typeof t.baseAmount === "number"
+          ? t.baseAmount
+          : eurFrom(getAmountNumber(t.amount), txCcy);
+
+      addEUR(accId, sign * eurVal);
     }
 
-    // in/out
-    const sign = t.type === "in" ? +1 : -1;
-    const accId = t.accountId!;
-    add(accId, sign * Number(t.amount.value || 0), t.amount.currency, sign * Number(t.baseAmount || 0));
-  }
-  return map;
-}, [txs]);
+    return map;
+  }, [txs, fx, accIndex]);
 
   const rows = useMemo(() => {
     return accounts
       .filter(a => !a.archived)
       .map(a => {
         const mv = movementsByAccount.get(a.id) || { amt: 0, eur: 0 };
-        const opening = Number(a.openingBalance || 0);
-        const balAmt = opening + mv.amt;
+        const opening = n(a.openingBalance);
         const openingEur = eurFrom(opening, a.currency);
-        const balEur = openingEur + mv.eur;
+        const balAmt = opening + mv.amt;        // в валюте счёта
+        const balEur = openingEur + mv.eur;     // в EUR
         return { ...a, balAmt, balEur };
       });
   }, [accounts, movementsByAccount, fx]);
@@ -142,7 +207,7 @@ const movementsByAccount = useMemo(() => {
     const payload = {
       name: form.name.trim(),
       currency: form.currency,
-      openingBalance: Number(form.openingBalance || 0),
+      openingBalance: n(form.openingBalance),
       createdAt: Timestamp.now(),
     };
     if (!payload.name) return;
