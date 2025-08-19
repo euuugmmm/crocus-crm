@@ -17,11 +17,13 @@ import {
   getDocs,
   deleteDoc,
   doc,
+  addDoc, // 👈 добавили
+  setDoc,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 import TxModal from "@/components/finance/TxModal";
-import { normalizeTx, removeTxWithOrders } from "@/lib/finance/tx";
+import { normalizeTx, removeTxWithOrders, buildTxPayload } from "@/lib/finance/tx"; // 👈 добавили buildTxPayload
 
 import {
   Account,
@@ -168,6 +170,9 @@ export default function FinanceTransactions() {
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
+  // состояние для действий по строкам (чтобы дизейблить кнопки)
+  const [rowLoadingId, setRowLoadingId] = useState<string | null>(null);
+
   /** доступы */
   useEffect(() => {
     if (!user) { router.replace("/login"); return; }
@@ -312,9 +317,10 @@ export default function FinanceTransactions() {
           currency: p.currency || "EUR",
           baseAmount: eur,
 
-          // оригинальный id плановой записи — для удаления
+          // оригинальный id плановой записи — для удаления/конвертации
           plannedId: p.id,
-        } as any as TxRow; // расширили тип полем plannedId
+          counterpartyId: p.counterpartyId || "", // если есть
+        } as any as TxRow; // расширили тип полями plannedId/counterpartyId
       });
   }, [plannedRaw]);
 
@@ -446,6 +452,7 @@ export default function FinanceTransactions() {
   }
 
   /** фильтры + отображаемый список */
+  const txsAllMemo = txsAll; // для замыкания в syncMsg, не трогаем
   const displayed = useMemo(() => {
     const df = f.dateFrom ? new Date(f.dateFrom) : null;
     const dt = f.dateTo ? new Date(f.dateTo) : null;
@@ -520,8 +527,17 @@ export default function FinanceTransactions() {
     // Плановая
     if (row.status === "planned") {
       const plannedId = (row as any).plannedId || row.id.replace(/^planned_/, "");
-      if (!confirm("Удалить плановую транзакцию?")) return;
-      await deleteDoc(doc(db, "finance_planned", plannedId));
+      if (!plannedId) { alert("Не найден plannedId"); return; }
+      const ok = confirm("Удалить плановую транзакцию?");
+      if (!ok) return;
+      try {
+        setRowLoadingId(row.id);
+        await deleteDoc(doc(db, "finance_planned", plannedId));
+      } catch (e: any) {
+        alert(`Не удалось удалить плановую: ${String(e?.message || e)}`);
+      } finally {
+        setRowLoadingId(null);
+      }
       return;
     }
 
@@ -534,7 +550,6 @@ export default function FinanceTransactions() {
       const snap = await getDocs(qBoth);
       const batchIds = snap.docs.map(d => d.id);
       for (const id of batchIds) {
-        // у переводов ордеров быть не должно, но на всякий — удалим как обычную транзакцию
         await removeTxWithOrders(id);
       }
       return;
@@ -543,6 +558,60 @@ export default function FinanceTransactions() {
     // Обычная факт-транзакция
     if (!confirm("Удалить транзакцию и её ордера?")) return;
     await removeTxWithOrders(row.id);
+  };
+
+  // Конвертация плана в факт
+  const makePlannedActual = async (row: TxRow) => {
+    const plannedId = (row as any).plannedId || row.id.replace(/^planned_/, "");
+    if (!plannedId) { alert("Не найден plannedId"); return; }
+    if (!row.date || !row.accountId || !row.side) { alert("Не хватает данных плана (дата/счёт/тип)"); return; }
+
+    const ok = confirm("Создать фактическую транзакцию из этой плановой и удалить план?");
+    if (!ok) return;
+
+    try {
+      setRowLoadingId(row.id);
+
+      // восстановим counterpartyId по имени, если его нет
+      const counterpartyId =
+        (row as any).counterpartyId ||
+        (counterparties.find(c => (c.name || "").trim().toLowerCase() === (row.counterpartyName || "").trim().toLowerCase())?.id ?? null);
+
+      // Собираем форму для buildTxPayload
+      const form: Partial<TxRow> = {
+        date: row.date,
+        accountId: row.accountId,
+        currency: row.currency as any,
+        side: row.side as CategorySide,
+        amount: Number(row.amount || 0),
+        baseAmount: Number(row.baseAmount || 0), // EUR уже посчитан в плане
+        categoryId: row.categoryId || null,
+        counterpartyId: counterpartyId || null,
+        note: row.note || "",
+        method: "bank",
+        status: "actual",
+        bookingAllocations: [], // из плана обычно нет
+      };
+
+      const payload = buildTxPayload(
+        form,
+        { accounts, categories, counterparties, fxList },
+        undefined
+      );
+
+      // пишем факт
+      const ref = await addDoc(collection(db, "finance_transactions"), payload as any);
+
+      // помечаем план как «сопоставлен» и удаляем (или просто удаляем)
+      await deleteDoc(doc(db, "finance_planned", plannedId));
+
+      // подсветим новый факт
+      onSaved(ref.id);
+    } catch (e: any) {
+      alert(`Не удалось сконвертировать: ${String(e?.message || e)}`);
+    } finally {
+      setRowLoadingId(null);
+    }
   };
 
   /** ── бейдж распределения ── */
@@ -789,6 +858,8 @@ export default function FinanceTransactions() {
                 const ownerIgorEUR = founders?.ig || 0;
                 const ownerEvgeniyEUR = founders?.ev || 0;
 
+                const isPlanned = t.status === "planned";
+
                 return (
                   <tr
                     key={t.id}
@@ -811,7 +882,7 @@ export default function FinanceTransactions() {
                       )}
                     </td>
                     <td className="border px-2 py-1">
-                      {t.status === "planned" ? "План" : t.status === "reconciled" ? "Сверено" : "Факт"}
+                      {isPlanned ? "План" : t.status === "reconciled" ? "Сверено" : "Факт"}
                     </td>
                     <td className="border px-2 py-1 text-right whitespace-nowrap">{t.amount.toFixed(2)} {t.currency}</td>
                     <td className="border px-2 py-1 text-right whitespace-nowrap">{t.baseAmount.toFixed(2)} €</td>
@@ -839,7 +910,7 @@ export default function FinanceTransactions() {
                       <div className="inline-flex gap-2">
                         {canEdit && (
                           <>
-                            {t.status !== "planned" && (
+                            {!isPlanned && (
                               <button
                                 className="h-7 px-2 border rounded hover:bg-gray-100"
                                 onClick={() => openEdit(t)}
@@ -848,12 +919,25 @@ export default function FinanceTransactions() {
                                 ✏️
                               </button>
                             )}
+
+                            {isPlanned && (
+                              <button
+                                className="h-7 px-2 border rounded bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50"
+                                onClick={() => makePlannedActual(t)}
+                                disabled={rowLoadingId === t.id}
+                                title="Сделать фактической"
+                              >
+                                ✔️ 
+                              </button>
+                            )}
+
                             <button
-                              className="h-7 px-2 border rounded hover:bg-red-50"
+                              className="h-7 px-2 border rounded hover:bg-red-50 disabled:opacity-50"
                               onClick={() => removeTx(t)}
-                              title="Удалить"
+                              disabled={rowLoadingId === t.id}
+                              title={isPlanned ? "Удалить плановую" : "Удалить транзакцию"}
                             >
-                              🗑️
+                              {rowLoadingId === t.id ? "…" : "🗑️"}
                             </button>
                           </>
                         )}

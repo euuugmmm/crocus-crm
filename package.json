@@ -21,6 +21,7 @@
     "date-fns": "^2.30.0",
     "docx-templates": "^4.14.1",
     "docxtemplater": "^3.65.2",
+    "fast-xml-parser": "^5.2.5",
     "firebase": "^9.22.0",
     "firebase-admin": "^13.4.0",
     "firebase-functions": "^6.4.0",
