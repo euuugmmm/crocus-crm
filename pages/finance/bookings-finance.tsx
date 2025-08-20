@@ -35,6 +35,8 @@ const padISO = (d: Date) => {
   return z.toISOString().slice(0, 10);
 };
 const todayISO = () => padISO(new Date());
+const EPS = 0.01;
+const isoOrEmpty = (d?: Date | null) => (d ? padISO(d) : "");
 
 /* данные заявки */
 type Booking = {
@@ -75,6 +77,7 @@ type OrderLite = {
   side: "income" | "expense";
   baseAmount: number; // EUR
   status: string;     // posted
+  date?: string;      // YYYY-MM-DD
 };
 
 export default function BookingsFinanceReport() {
@@ -153,7 +156,7 @@ export default function BookingsFinanceReport() {
     backoffice: "all" as "all" | "yes" | "no",
   });
 
-  /* сортировка — как у менеджера */
+  /* сортировка — как у менеджера, но дефолт теперь другой */
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
   function requestSort(key: string) {
     setSortConfig((prev) => {
@@ -172,7 +175,7 @@ export default function BookingsFinanceReport() {
       setRows(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
     });
 
-    // ФАКТ: только из ордеров
+    // ФАКТ: только из ордеров (берём и дату!)
     const unsubOrders = onSnapshot(
       query(collection(db, "finance_orders"), where("status", "==", "posted")),
       (snap) => {
@@ -184,6 +187,7 @@ export default function BookingsFinanceReport() {
             side: v.side as "income" | "expense",
             baseAmount: Number(v.baseAmount || 0),
             status: String(v.status || ""),
+            date: String(v.date || ""),
           } as OrderLite;
         });
         setOrders(list);
@@ -210,6 +214,23 @@ export default function BookingsFinanceReport() {
     return map;
   }, [orders]);
 
+  /* карта по приходам: последняя дата поступления и количество приходов */
+  const incomeInfoByBooking = useMemo(() => {
+    const m = new Map<string, { lastIncomeDate: string | null; totalIncome: number; count: number }>();
+    for (const o of orders) {
+      if (o.side !== "income") continue;
+      const cur = m.get(o.bookingId) || { lastIncomeDate: null, totalIncome: 0, count: 0 };
+      const iso = String(o.date || "");
+      cur.lastIncomeDate = cur.lastIncomeDate
+        ? (iso > cur.lastIncomeDate ? iso : cur.lastIncomeDate)
+        : (iso || cur.lastIncomeDate);
+      cur.totalIncome += Math.abs(o.baseAmount || 0);
+      cur.count += 1;
+      m.set(o.bookingId, cur);
+    }
+    return m;
+  }, [orders]);
+
   /* фильтрация — оригинальная логика */
   const filtered = useMemo(() => {
     const createdFrom = filters.dateFrom ? new Date(filters.dateFrom) : null;
@@ -219,122 +240,155 @@ export default function BookingsFinanceReport() {
     const checkOutFrom = filters.checkOutFrom ? new Date(filters.checkOutFrom) : null;
     const checkOutTo = filters.checkOutTo ? new Date(filters.checkOutTo) : null;
 
-    return rows
-      .filter((b) => {
-        // created
-        const created = toDate(b.createdAt);
-        if (createdFrom && (!created || created < createdFrom)) return false;
-        if (createdTo && (!created || created > createdTo)) return false;
+    const base = rows.filter((b) => {
+      // created
+      const created = toDate(b.createdAt);
+      if (createdFrom && (!created || created < createdFrom)) return false;
+      if (createdTo && (!created || created > createdTo)) return false;
 
-        // check-in/out
-        const ci = toDate(b.checkIn);
-        if (checkInFrom && (!ci || ci < checkInFrom)) return false;
-        if (checkInTo && (!ci || ci > checkInTo)) return false;
+      // check-in/out
+      const ci = toDate(b.checkIn);
+      if (checkInFrom && (!ci || ci < checkInFrom)) return false;
+      if (checkInTo && (!ci || ci > checkInTo)) return false;
 
-        const co = toDate(b.checkOut);
-        if (checkOutFrom && (!co || co < checkOutFrom)) return false;
-        if (checkOutTo && (!co || co > checkOutTo)) return false;
+      const co = toDate(b.checkOut);
+      if (checkOutFrom && (!co || co < checkOutFrom)) return false;
+      if (checkOutTo && (!co || co > checkOutTo)) return false;
 
-        // текстовые
-        if (!((b.bookingNumber || "").toLowerCase().includes(filters.bookingNumber.toLowerCase()))) return false;
-        if (!((b.agentName || "").toLowerCase().includes(filters.agentName.toLowerCase()))) return false;
-        if (!((b.operator || "").toLowerCase().includes(filters.operator.toLowerCase()))) return false;
-        if (!((b.hotel || "").toLowerCase().includes(filters.hotel.toLowerCase()))) return false;
+      // текстовые
+      if (!((b.bookingNumber || "").toLowerCase().includes(filters.bookingNumber.toLowerCase()))) return false;
+      if (!((b.agentName || "").toLowerCase().includes(filters.agentName.toLowerCase()))) return false;
+      if (!((b.operator || "").toLowerCase().includes(filters.operator.toLowerCase()))) return false;
+      if (!((b.hotel || "").toLowerCase().includes(filters.hotel.toLowerCase()))) return false;
 
-        // суммы (точное совпадение, как раньше)
-        if (filters.bruttoClient && fixed2(b.bruttoClient) !== fixed2(filters.bruttoClient)) return false;
-        if (filters.internalNet && fixed2(b.internalNet) !== fixed2(filters.internalNet)) return false;
+      // суммы (точное совпадение, как раньше)
+      if (filters.bruttoClient && fixed2(b.bruttoClient) !== fixed2(filters.bruttoClient)) return false;
+      if (filters.internalNet && fixed2(b.internalNet) !== fixed2(filters.internalNet)) return false;
 
-        // универсальная «Комиссия Crocus»
-        if (filters.crocusAmount) {
-          const brutto = toNumber(b.bruttoClient);
-          const netCrocus = toNumber(b.internalNet);
-          const komis = toNumber((b as any).realCommission) || toNumber((b as any).commission) || (brutto - netCrocus);
-          const crocusAmount = b.bookingType === "olimpya_base" ? komis : (brutto - netCrocus);
-          if (fixed2(crocusAmount) !== fixed2(filters.crocusAmount)) return false;
-        }
+      // универсальная «Комиссия Crocus»
+      if (filters.crocusAmount) {
+        const brutto = toNumber(b.bruttoClient);
+        const netCrocus = toNumber(b.internalNet);
+        const komis = toNumber((b as any).realCommission) || toNumber((b as any).commission) || (brutto - netCrocus);
+        const crocusAmount = b.bookingType === "olimpya_base" ? komis : (brutto - netCrocus);
+        if (fixed2(crocusAmount) !== fixed2(filters.crocusAmount)) return false;
+      }
 
-        // тип
-        if (filters.bookingType && !(b.bookingType || "").toLowerCase().includes(filters.bookingType.toLowerCase()))
-          return false;
+      // тип
+      if (filters.bookingType && !(b.bookingType || "").toLowerCase().includes(filters.bookingType.toLowerCase()))
+        return false;
 
-        // бэкофис (единый флаг)
-        const backoffice = !!(b.backofficePosted ?? b.backofficeEntered);
-        if (filters.backoffice === "yes" && !backoffice) return false;
-        if (filters.backoffice === "no" && backoffice) return false;
+      // бэкофис (единый флаг)
+      const backoffice = !!(b.backofficePosted ?? b.backofficeEntered);
+      if (filters.backoffice === "yes" && !backoffice) return false;
+      if (filters.backoffice === "no" && backoffice) return false;
 
-        // общий поиск
-        const q = filters.search.trim().toLowerCase();
-        if (q) {
-          const s = [
-            b.bookingNumber,
-            b.operator,
-            b.hotel,
-            b.destination,
-            b.tourists?.map((t) => t.name).join(" "),
-            b.payerName,
-          ]
-            .join(" ")
-            .toLowerCase();
-          if (!s.includes(q)) return false;
-        }
+      // общий поиск
+      const q = filters.search.trim().toLowerCase();
+      if (q) {
+        const s = [
+          b.bookingNumber,
+          b.operator,
+          b.hotel,
+          b.destination,
+          b.tourists?.map((t) => t.name).join(" "),
+          b.payerName,
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!s.includes(q)) return false;
+      }
 
-        return true;
-      })
-      .sort((a, b) => {
-        if (!sortConfig) {
-          const aT = toDate(a.createdAt)?.getTime() || 0;
-          const bT = toDate(b.createdAt)?.getTime() || 0;
-          return bT - aT;
-        }
-        const key = sortConfig.key;
-        const dir = sortConfig.direction === "asc" ? 1 : -1;
+      return true;
+    });
 
-        const num = (v: any) => toNumber(v);
-        const str = (v: any) => String(v || "").toLowerCase();
+    // ======= СОРТИРОВКА =======
+    // По умолчанию: НЕДОПЛАЧЕННЫЕ СВЕРХУ, внутри —
+    //   • если были приходы — по последнему приходу (DESC),
+    //   • иначе — по дате создания (DESC).
+    // Полностью оплаченные — ниже, тоже по последнему приходу (или createdAt, если приходов нет).
+    if (!sortConfig) {
+      return base.sort((a, b) => {
+        const aId = String(a.id || "");
+        const bId = String(b.id || "");
 
-        switch (key) {
-          case "type":
-            return str(a.bookingType).localeCompare(str(b.bookingType)) * dir;
-          case "date":
-            return ((toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0)) * dir;
-          case "bookingNumber": {
-            const aa = parseInt((a.bookingNumber || "").replace(/\D/g, "") || "0", 10);
-            const bb = parseInt((b.bookingNumber || "").replace(/\D/g, "") || "0", 10);
-            return (aa - bb) * dir;
-          }
-          case "agent":
-            return str(a.agentName).localeCompare(str(b.agentName)) * dir;
-          case "operator":
-            return str(a.operator).localeCompare(str(b.operator)) * dir;
-          case "hotel":
-            return str(a.hotel).localeCompare(str(b.hotel)) * dir;
-          case "checkIn":
-            return ((toDate(a.checkIn)?.getTime() || 0) - (toDate(b.checkIn)?.getTime() || 0)) * dir;
-          case "checkOut":
-            return ((toDate(a.checkOut)?.getTime() || 0) - (toDate(b.checkOut)?.getTime() || 0)) * dir;
-          case "bruttoClient":
-            return (num(a.bruttoClient) - num(b.bruttoClient)) * dir;
-          case "internalNet":
-            return (num(a.internalNet) - num(b.internalNet)) * dir;
-          case "crocusAmount": {
-            const bruttoA = num(a.bruttoClient);
-            const netA = num(a.internalNet);
-            const komisA = num((a as any).realCommission) || num((a as any).commission) || (bruttoA - netA);
-            const ca = a.bookingType === "olimpya_base" ? komisA : (bruttoA - netA);
+        const bruttoA = n(a.bruttoClient);
+        const bruttoB = n(b.bruttoClient);
 
-            const bruttoB = num(b.bruttoClient);
-            const netB = num(b.internalNet);
-            const komisB = num((b as any).realCommission) || num((b as any).commission) || (bruttoB - netB);
-            const cb = b.bookingType === "olimpya_base" ? komisB : (bruttoB - netB);
+        const incA = incomeInfoByBooking.get(aId);
+        const incB = incomeInfoByBooking.get(bId);
+        const inFactA = incA?.totalIncome || 0;
+        const inFactB = incB?.totalIncome || 0;
 
-            return (ca - cb) * dir;
-          }
-          default:
-            return 0;
-        }
+        const unpaidA = inFactA + EPS < bruttoA;
+        const unpaidB = inFactB + EPS < bruttoB;
+
+        // Сначала недоплаченные
+        if (unpaidA !== unpaidB) return unpaidB ? 1 : -1; // unpaid(true) должен идти раньше => вернуть -1
+
+        const lastA = incA?.lastIncomeDate && incA?.count ? incA.lastIncomeDate : isoOrEmpty(toDate(a.createdAt));
+        const lastB = incB?.lastIncomeDate && incB?.count ? incB.lastIncomeDate : isoOrEmpty(toDate(b.createdAt));
+
+        // Новее — выше
+        if (lastA && lastB && lastA !== lastB) return lastA > lastB ? -1 : 1;
+
+        // Фолбэк: по номеру (убывающе), чтобы стабильно
+        const aa = parseInt((a.bookingNumber || "").replace(/\D/g, "") || "0", 10);
+        const bb = parseInt((b.bookingNumber || "").replace(/\D/g, "") || "0", 10);
+        return bb - aa;
       });
-  }, [rows, filters, sortConfig]);
+    }
+
+    // Явная сортировка из UI — прежняя логика
+    return base.sort((a, b) => {
+      const key = sortConfig.key;
+      const dir = sortConfig.direction === "asc" ? 1 : -1;
+
+      const num = (v: any) => toNumber(v);
+      const str = (v: any) => String(v || "").toLowerCase();
+
+      switch (key) {
+        case "type":
+          return str(a.bookingType).localeCompare(str(b.bookingType)) * dir;
+        case "date":
+          return ((toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0)) * dir;
+        case "bookingNumber": {
+          const aa = parseInt((a.bookingNumber || "").replace(/\D/g, "") || "0", 10);
+          const bb = parseInt((b.bookingNumber || "").replace(/\D/g, "") || "0", 10);
+          return (aa - bb) * dir;
+        }
+        case "agent":
+          return str(a.agentName).localeCompare(str(b.agentName)) * dir;
+        case "operator":
+          return str(a.operator).localeCompare(str(b.operator)) * dir;
+        case "hotel":
+          return str(a.hotel).localeCompare(str(b.hotel)) * dir;
+        case "checkIn":
+          return ((toDate(a.checkIn)?.getTime() || 0) - (toDate(b.checkIn)?.getTime() || 0)) * dir;
+        case "checkOut":
+          return ((toDate(a.checkOut)?.getTime() || 0) - (toDate(b.checkOut)?.getTime() || 0)) * dir;
+        case "bruttoClient":
+          return (num(a.bruttoClient) - num(b.bruttoClient)) * dir;
+        case "internalNet":
+          return (num(a.internalNet) - num(b.internalNet)) * dir;
+        case "crocusAmount": {
+          const bruttoA = num(a.bruttoClient);
+          const netA = num(a.internalNet);
+          const komisA = num((a as any).realCommission) || num((a as any).commission) || (bruttoA - netA);
+          const ca = a.bookingType === "olimpya_base" ? komisA : (bruttoA - netA);
+
+          const bruttoB = num(b.bruttoClient);
+          const netB = num(b.internalNet);
+          const komisB = num((b as any).realCommission) || num((b as any).commission) || (bruttoB - netB);
+          const cb = b.bookingType === "olimpya_base" ? komisB : (bruttoB - netB);
+
+          return (ca - cb) * dir;
+        }
+        default:
+          return 0;
+      }
+    });
+  }, [rows, filters, sortConfig, incomeInfoByBooking]);
 
   /* расчёты + разбиение по учредителям + факты */
   const data = useMemo(() => {

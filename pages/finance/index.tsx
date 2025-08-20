@@ -116,6 +116,7 @@ export default function FinanceIndex() {
           <TinyTile href="/finance/planned" icon={<FileText className="w-4 h-4" />} title="Плановые операции" />
           <TinyTile href="/finance/import/mt940" icon={<UploadCloud className="w-4 h-4" />} title="Импорт выписок (MT940)" />
           <TinyTile href="/finance/setup" icon={<Settings className="w-4 h-4" />} title="Настройки модуля" />
+          <TinyTile href="/finance/report" icon={<BarChart3 className="w-4 h-4" />} title="Баланс заявок и обязательств" />
 
         </div>
       </section>

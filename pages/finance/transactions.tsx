@@ -17,13 +17,12 @@ import {
   getDocs,
   deleteDoc,
   doc,
-  addDoc, // 👈 добавили
-  setDoc,
+  addDoc,
 } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 
 import TxModal from "@/components/finance/TxModal";
-import { normalizeTx, removeTxWithOrders, buildTxPayload } from "@/lib/finance/tx"; // 👈 добавили buildTxPayload
+import { normalizeTx, removeTxWithOrders, buildTxPayload } from "@/lib/finance/tx";
 
 import {
   Account,
@@ -133,6 +132,7 @@ function addDays(d: Date, n: number) { const x = new Date(d); x.setDate(x.getDat
 
 const todayISO = localISO(new Date());
 const defaultFromISO = localISO(addDays(new Date(), -90)); // последние 90 дней
+const EPS = 0.01;
 
 /** ===== Page ===== */
 export default function FinanceTransactions() {
@@ -140,7 +140,7 @@ export default function FinanceTransactions() {
   const { user, isManager, isSuperManager, isAdmin } = useAuth();
   const canView = canViewFinance(
     { isManager, isSuperManager, isAdmin },
-    { includeManager: true } // пока пускаем менеджеров
+    { includeManager: true }
   );
   const canEdit = canView;
 
@@ -170,7 +170,7 @@ export default function FinanceTransactions() {
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
-  // состояние для действий по строкам (чтобы дизейблить кнопки)
+  // состояние для действий по строкам
   const [rowLoadingId, setRowLoadingId] = useState<string | null>(null);
 
   /** доступы */
@@ -214,7 +214,7 @@ export default function FinanceTransactions() {
     const from = f.dateFrom || defaultFromISO;
     const to = f.dateTo || todayISO;
 
-    // транзакции: только диапазон дат
+    // транзакции
     const ut = onSnapshot(
       query(
         collection(db, "finance_transactions"),
@@ -226,7 +226,7 @@ export default function FinanceTransactions() {
       (err) => console.error("[transactions] onSnapshot error:", err)
     );
 
-    // плановые: только диапазон дат
+    // плановые
     const up2 = onSnapshot(
       query(
         collection(db, "finance_planned"),
@@ -238,7 +238,7 @@ export default function FinanceTransactions() {
       (err) => console.error("[planned] onSnapshot error:", err)
     );
 
-    // ордера: только posted и только диапазон дат
+    // ордера
     const uo = onSnapshot(
       query(
         collection(db, "finance_orders"),
@@ -268,7 +268,7 @@ export default function FinanceTransactions() {
     return () => { ua(); uc(); up(); uf(); ut(); uo(); up2(); };
   }, [user, canView, f.dateFrom, f.dateTo]);
 
-  /** лениво подтягиваем bookings только при открытии модалки (разово) */
+  /** лениво подтягиваем bookings для модалки */
   useEffect(() => {
     if (!modalOpen || bookingsLoaded) return;
     (async () => {
@@ -299,51 +299,55 @@ export default function FinanceTransactions() {
     return plannedRaw
       .filter(p => !p.matchedTxId)
       .map((p: any) => {
-        const side = (p.side === "income" ? "income" : "expense") as CategorySide;
-        const amount = Number(p.amount || 0);
+        // нормализуем сторону: side может отсутствовать у «выплат»
+        const rawSide = String(p.side || p.type || p.kind || "").toLowerCase();
         const eur = Number(p.eurAmount || 0);
+        const catName = String(p.categoryName || p.categoryId || "").toLowerCase();
+        const isExpenseByName = /(выплат|учред|founder|commission|комисс|agent)/i.test(catName);
+        const side: CategorySide =
+          rawSide === "income" || rawSide === "in" ? "income"
+          : rawSide === "expense" || rawSide === "out" || rawSide === "payout" ? "expense"
+          : (eur < -EPS || isExpenseByName ? "expense" : "income");
+
         return {
-          id: `planned_${p.id}`,        // чтобы не пересекаться с факт id
-          date: String(p.date || ""),
+          id: `planned_${p.id}`,
+          date: String(p.date || "") || todayISO,
           side,
           status: "planned",
-          accountId: p.accountId || "",
+          accountId: p.accountId || "",                       // может быть пусто — починим при конвертации
           accountName: p.accountName || p.accountId || "—",
           categoryId: p.categoryId || "",
           categoryName: p.categoryName || p.categoryId || "—",
           counterpartyName: p.counterpartyName || "—",
           note: p.note || "",
-          amount,
+          amount: Number(p.amount || 0),
           currency: p.currency || "EUR",
           baseAmount: eur,
 
-          // оригинальный id плановой записи — для удаления/конвертации
           plannedId: p.id,
-          counterpartyId: p.counterpartyId || "", // если есть
-        } as any as TxRow; // расширили тип полями plannedId/counterpartyId
+          counterpartyId: p.counterpartyId || "",
+        } as any as TxRow;
       });
   }, [plannedRaw]);
 
-  /** все строки для таблицы: факт + план */
+  /** все строки: факт + план */
   const txsAll: TxRow[] = useMemo(() => {
     return [...txs, ...plannedTxs];
   }, [txs, plannedTxs]);
 
-  /** индекс: raw по id (нужно для признаков перевода и т.п.) */
+  /** индексы/агрегаты */
   const rawById = useMemo(() => {
     const m = new Map<string, any>();
     for (const r of rowsRaw) m.set(r.id, r);
     return m;
   }, [rowsRaw]);
 
-  /** индекс: аккаунты по id — для названий счетов при переводах */
   const accById = useMemo(() => {
     const m = new Map<string, Account>();
     for (const a of accounts) m.set(a.id, a);
     return m;
   }, [accounts]);
 
-  /** точные суммы по учредителям из raw (для бейджа и фильтра) */
   const foundersByTx = useMemo(() => {
     const m = new Map<string, { ig: number; ev: number }>();
     for (const r of rowsRaw) {
@@ -354,7 +358,6 @@ export default function FinanceTransactions() {
     return m;
   }, [rowsRaw]);
 
-  /** агрегаты из ОРДЕРОВ → по txId */
   const ordersByTx = useMemo(() => {
     const m = new Map<string, { sum: number; count: number; items: Allocation[] }>();
     for (const o of orders) {
@@ -367,7 +370,6 @@ export default function FinanceTransactions() {
     return m;
   }, [orders]);
 
-  /** sums by booking из ОРДЕРОВ → для витрины заявки */
   const sumsByBooking = useMemo(() => {
     const m = new Map<string, { inc: number; exp: number }>();
     for (const o of orders) {
@@ -379,7 +381,6 @@ export default function FinanceTransactions() {
     return m;
   }, [orders]);
 
-  /** витрина заявок для модалки */
   const bookingOptionsMap: Map<string, BookingOption> = useMemo(() => {
     const map = new Map<string, BookingOption>();
     for (const b of bookingsAll) {
@@ -424,7 +425,7 @@ export default function FinanceTransactions() {
     return map;
   }, [bookingsAll, sumsByBooking]);
 
-  /** классификация распределения (для фильтра) */
+  /** классификация распределения */
   function classifyAlloc(t: TxRow): "booked_full" | "booked_part" | "founders" | "none" | "transfer" {
     const raw = rawById.get(t.id);
     if (raw?.transferPairId || raw?.transferLeg) return "transfer";
@@ -440,7 +441,6 @@ export default function FinanceTransactions() {
     if (fullByBookings) return "booked_full";
     if (partByBookings) return "booked_part";
 
-    // учредители (legacy ownerWho или точные суммы) — только для факта
     if (t.status !== "planned") {
       const fz = foundersByTx.get(t.id);
       const hasFoundersExact = !!fz && (fz.ig > 0 || fz.ev > 0);
@@ -451,8 +451,7 @@ export default function FinanceTransactions() {
     return "none";
   }
 
-  /** фильтры + отображаемый список */
-  const txsAllMemo = txsAll; // для замыкания в syncMsg, не трогаем
+  /** фильтры + список */
   const displayed = useMemo(() => {
     const df = f.dateFrom ? new Date(f.dateFrom) : null;
     const dt = f.dateTo ? new Date(f.dateTo) : null;
@@ -473,30 +472,25 @@ export default function FinanceTransactions() {
           ].join(" ").toLowerCase();
           if (!s.includes(q)) return false;
         }
-
-        // фильтр по распределению
         if (f.alloc !== "all") {
           const cls = classifyAlloc(t);
           if (cls !== f.alloc) return false;
         }
-
         return true;
       })
       .sort((a, b) => (a.date < b.date ? 1 : -1));
   }, [txsAll, f, ordersByTx, foundersByTx, rawById]);
 
-  /** итоги: считаем только ФАКТ, без плановых и без переводов */
+  /** итоги (только ФАКТ) */
   const totals = useMemo(() => {
     let inc = 0, exp = 0;
     for (const t of displayed) {
       if (t.status === "planned") continue;
-      const raw = rawById.get(t.id);
-      if (raw?.transferPairId || raw?.transferLeg) continue;
       if (t.side === "income") inc += t.baseAmount;
       else exp += t.baseAmount;
     }
     return { income: +inc.toFixed(2), expense: +exp.toFixed(2), net: +(inc - exp).toFixed(2) };
-  }, [displayed, rawById]);
+  }, [displayed]);
 
   /** выделение строки из ?highlight=txId */
   useEffect(() => {
@@ -514,7 +508,7 @@ export default function FinanceTransactions() {
     setModalOpen(true);
   };
   const openEdit = (row: TxRow) => {
-    if (row.status === "planned") return; // план правим на своей странице/модалке
+    if (row.status === "planned") return; // план правим из отдельной формы
     setModalInitial(row);
     setModalOpen(true);
   };
@@ -522,11 +516,26 @@ export default function FinanceTransactions() {
     router.replace({ pathname: router.pathname, query: { highlight: id } }, undefined, { shallow: true });
   };
 
-  // Удаление: различаем факт/план и переводы
+  // Helpers для план→факт
+  function pickDefaultAccountId(currency?: string): string | null {
+    const notArchived = accounts.filter(a => !a.archived);
+    const byCur = currency ? notArchived.find(a => (a.currency || "").toUpperCase() === (currency || "").toUpperCase()) : null;
+    if (byCur) return byCur.id;
+    if (notArchived[0]) return notArchived[0].id;
+    return accounts[0]?.id || null;
+  }
+  function inferSideFromPlanned(row: TxRow): CategorySide {
+    const name = String(row.categoryName || row.categoryId || "").toLowerCase();
+    if (/выплат|учред|founder|commission|комисс|agent/.test(name)) return "expense";
+    const eur = Number(row.baseAmount || 0);
+    if (eur < -EPS) return "expense";
+    return (row.side as CategorySide) || "income";
+  }
+
+  // Удаление
   const removeTx = async (row: TxRow) => {
-    // Плановая
     if (row.status === "planned") {
-      const plannedId = (row as any).plannedId || row.id.replace(/^planned_/, "");
+      const plannedId = (row as any).plannedId || String(row.id || "").replace(/^planned_/, "");
       if (!plannedId) { alert("Не найден plannedId"); return; }
       const ok = confirm("Удалить плановую транзакцию?");
       if (!ok) return;
@@ -541,9 +550,8 @@ export default function FinanceTransactions() {
       return;
     }
 
+    // Факт: перевод — удаляем обе ножки
     const raw = rawById.get(row.id);
-
-    // Если перевод — удаляем обе ножки по transferPairId
     if (raw?.transferPairId) {
       if (!confirm("Удалить перевод (обе операции)?")) return;
       const qBoth = query(collection(db, "finance_transactions"), where("transferPairId", "==", raw.transferPairId));
@@ -560,31 +568,46 @@ export default function FinanceTransactions() {
     await removeTxWithOrders(row.id);
   };
 
-  // Конвертация плана в факт
+  // Конвертация плана в факт — теперь с автодозаполнением
   const makePlannedActual = async (row: TxRow) => {
-    const plannedId = (row as any).plannedId || row.id.replace(/^planned_/, "");
+    const plannedId = (row as any).plannedId || String(row.id || "").replace(/^planned_/, "");
     if (!plannedId) { alert("Не найден plannedId"); return; }
-    if (!row.date || !row.accountId || !row.side) { alert("Не хватает данных плана (дата/счёт/тип)"); return; }
-
-    const ok = confirm("Создать фактическую транзакцию из этой плановой и удалить план?");
-    if (!ok) return;
 
     try {
       setRowLoadingId(row.id);
 
-      // восстановим counterpartyId по имени, если его нет
+      // 1) нормализуем обязательные поля
+      const date = row.date || todayISO;
+      const side = inferSideFromPlanned(row);
+      let accountId = row.accountId || null;
+
+      // если в плане только имя счёта — попробуем подцепить id
+      if (!accountId && row.accountName) {
+        const cand = accounts.find(a => (a.name || "").trim().toLowerCase() === (row.accountName || "").trim().toLowerCase());
+        if (cand) accountId = cand.id;
+      }
+      if (!accountId) {
+        accountId = pickDefaultAccountId(row.currency as string);
+      }
+      if (!accountId) {
+        alert("Не найден ни один доступный счёт для конвертации плана в факт.");
+        setRowLoadingId(null);
+        return;
+      }
+
+      // 2) восстановим counterpartyId по имени, если его нет
       const counterpartyId =
         (row as any).counterpartyId ||
         (counterparties.find(c => (c.name || "").trim().toLowerCase() === (row.counterpartyName || "").trim().toLowerCase())?.id ?? null);
 
-      // Собираем форму для buildTxPayload
+      // 3) Сформируем payload (EUR уже есть в baseAmount у плана)
       const form: Partial<TxRow> = {
-        date: row.date,
-        accountId: row.accountId,
-        currency: row.currency as any,
-        side: row.side as CategorySide,
+        date,
+        accountId,
+        currency: (row.currency as any) || "EUR",
+        side,
         amount: Number(row.amount || 0),
-        baseAmount: Number(row.baseAmount || 0), // EUR уже посчитан в плане
+        baseAmount: Number(row.baseAmount || 0),
         categoryId: row.categoryId || null,
         counterpartyId: counterpartyId || null,
         note: row.note || "",
@@ -599,13 +622,12 @@ export default function FinanceTransactions() {
         undefined
       );
 
-      // пишем факт
+      // 4) пишем факт
       const ref = await addDoc(collection(db, "finance_transactions"), payload as any);
 
-      // помечаем план как «сопоставлен» и удаляем (или просто удаляем)
+      // 5) удаляем план
       await deleteDoc(doc(db, "finance_planned", plannedId));
 
-      // подсветим новый факт
       onSaved(ref.id);
     } catch (e: any) {
       alert(`Не удалось сконвертировать: ${String(e?.message || e)}`);
@@ -647,7 +669,7 @@ export default function FinanceTransactions() {
     const agg = ordersByTx.get(txId) || { sum: 0, count: 0, items: [] as Allocation[] };
     const bookedSum = r2(agg.sum);
     const hasOrders = agg.count > 0;
-    const fullyByBookings = bookedSum + 0.01 >= totalEUR;
+    const fullyByBookings = hasOrders && bookedSum + 0.01 >= totalEUR;
     const noneByBookings = bookedSum <= 0.01;
 
     const foundersLeft = r2(Math.max(0, totalEUR - bookedSum));
@@ -683,7 +705,6 @@ export default function FinanceTransactions() {
       }
     }
 
-    // 1) legacy ownerWho (100/0 или 50/50)
     if (side === "expense" && ownerWho) {
       return (
         <span
@@ -696,7 +717,6 @@ export default function FinanceTransactions() {
       );
     }
 
-    // 2) новый способ — точные суммы в полях ownerIgorEUR/ownerEvgeniyEUR
     if (side === "expense" && (ownerIgorEUR > 0 || ownerEvgeniyEUR > 0)) {
       if (foundersMatch) {
         return (
@@ -720,7 +740,6 @@ export default function FinanceTransactions() {
       );
     }
 
-    // совсем нет распределения
     return (
       <span
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20"
@@ -807,7 +826,6 @@ export default function FinanceTransactions() {
             </select>
           </div>
 
-          {/* Новый фильтр: Распределение */}
           <div>
             <div className="text-xs text-gray-600 mb-1">Распределение</div>
             <select
