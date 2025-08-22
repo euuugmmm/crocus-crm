@@ -10,9 +10,9 @@ import {
 } from "@/types/finance";
 import { buildTxPayload, upsertOrdersForTransaction } from "@/lib/finance/tx";
 import { eurFrom } from "@/lib/finance/fx";
-import { addDoc, collection, doc, updateDoc } from "firebase/firestore";
 import { db } from "@/firebaseConfig";
 import { Briefcase, Users2 } from "lucide-react";
+import { addDoc, collection, doc, updateDoc, writeBatch } from "firebase/firestore";
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const r2 = (x: number) => Math.round((Number(x) || 0) * 100) / 100;
@@ -356,6 +356,27 @@ export default function TxModal({
     setForm(s => ({ ...s, ownerWho: preset as OwnerWho }));
   };
 
+async function resetBackofficeFlags(allocs: Allocation[]) {
+  // у каких заявок были созданы/изменены ордера
+  const ids = Array.from(new Set(allocs.map(a => a.bookingId).filter(Boolean)));
+  if (!ids.length) return;
+
+  const batch = writeBatch(db);
+  for (const id of ids) {
+    batch.update(doc(db, "bookings", id), {
+      backofficeEntered: false,
+      backofficePosted: false,
+    });
+  }
+  try {
+    await batch.commit();
+  } catch (e) {
+    console.error("[TxModal] resetBackofficeFlags failed:", e);
+    // не ломаем сохранение транзакции/ордеров, просто логируем
+  }
+}
+
+
   // save
   const save = async () => {
     if (!form.date) { alert("Укажите дату."); return; }
@@ -495,12 +516,15 @@ export default function TxModal({
       await updateDoc(doc(db, "finance_transactions", initial.id), payload as any);
       if (target === "bookings") {
         await upsertOrdersForTransaction(initial.id, payload as any, finalAllocs);
+        await resetBackofficeFlags(finalAllocs);
       }
+      
       onSaved?.(initial.id);
     } else {
       const ref = await addDoc(collection(db, "finance_transactions"), payload as any);
       if (target === "bookings") {
         await upsertOrdersForTransaction(ref.id, payload as any, finalAllocs);
+        await resetBackofficeFlags(finalAllocs);
       }
       onSaved?.(ref.id);
     }
@@ -509,6 +533,9 @@ export default function TxModal({
 
   if (!open) return null;
 
+
+
+  
   const bookingLabel = (() => {
     if (target !== "bookings") return "";
     if (form.side === "income") {

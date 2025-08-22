@@ -82,8 +82,9 @@ type OrderLite = {
 
 export default function BookingsFinanceReport() {
   const router = useRouter();
-  const { user, isManager, isSuperManager, isAdmin } = useAuth();
-  const canView = isManager || isSuperManager || isAdmin;
+  const { user, isManager, isSuperManager, isAdmin, loading } = useAuth();
+  const canViewRole = isManager || isSuperManager || isAdmin;
+  const canView = !loading && canViewRole;
 
   const [rows, setRows] = useState<Booking[]>([]);
   const [owners, setOwners] = useState<{ id: string; name: string; share: number }[]>([]);
@@ -136,7 +137,7 @@ export default function BookingsFinanceReport() {
     },
   ]);
 
-  /* ФИЛЬТРЫ — как раньше по виду и логике */
+  /* ФИЛЬТРЫ */
   const [filters, setFilters] = useState({
     bookingType: "",
     dateFrom: "",
@@ -151,7 +152,7 @@ export default function BookingsFinanceReport() {
     checkOutTo: "",
     bruttoClient: "",
     internalNet: "",
-    crocusAmount: "", // «Комиссия Crocus» (Olimpya=комиссия, Subagent=брутто-нетто)
+    crocusAmount: "",
     search: "",
     backoffice: "all" as "all" | "yes" | "no",
   });
@@ -165,17 +166,22 @@ export default function BookingsFinanceReport() {
     });
   }
 
+  /** редирект-гард: один раз после загрузки auth */
+  const redirectedOnce = useRef(false);
   useEffect(() => {
-    if (!user || !canView) {
-      router.replace("/login");
-      return;
-    }
+    if (loading || redirectedOnce.current) return;
+    if (!user) { redirectedOnce.current = true; router.replace("/login"); return; }
+    if (!canView) { redirectedOnce.current = true; router.replace("/agent/bookings"); return; }
+  }, [loading, user, canView, router]);
+
+  /** Подписки — только когда доступ разрешён */
+  useEffect(() => {
+    if (loading || !user || !canView) return;
 
     const unsubBookings = onSnapshot(collection(db, "bookings"), (snap) => {
       setRows(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
     });
 
-    // ФАКТ: только из ордеров (берём и дату!)
     const unsubOrders = onSnapshot(
       query(collection(db, "finance_orders"), where("status", "==", "posted")),
       (snap) => {
@@ -200,7 +206,7 @@ export default function BookingsFinanceReport() {
       unsubBookings();
       unsubOrders();
     };
-  }, [user, canView, router]);
+  }, [loading, user, canView]);
 
   /* агрегат оплат по bookingId (факт) — ТОЛЬКО по ордерам */
   const factByBooking = useMemo(() => {
@@ -231,7 +237,7 @@ export default function BookingsFinanceReport() {
     return m;
   }, [orders]);
 
-  /* фильтрация — оригинальная логика */
+  /* фильтрация — оригинальная логика + новый дефолт сортировки */
   const filtered = useMemo(() => {
     const createdFrom = filters.dateFrom ? new Date(filters.dateFrom) : null;
     const createdTo = filters.dateTo ? new Date(filters.dateTo) : null;
@@ -302,11 +308,7 @@ export default function BookingsFinanceReport() {
       return true;
     });
 
-    // ======= СОРТИРОВКА =======
-    // По умолчанию: НЕДОПЛАЧЕННЫЕ СВЕРХУ, внутри —
-    //   • если были приходы — по последнему приходу (DESC),
-    //   • иначе — по дате создания (DESC).
-    // Полностью оплаченные — ниже, тоже по последнему приходу (или createdAt, если приходов нет).
+    // ======= СОРТИРОВКА ПО УМОЛЧАНИЮ =======
     if (!sortConfig) {
       return base.sort((a, b) => {
         const aId = String(a.id || "");
@@ -324,22 +326,21 @@ export default function BookingsFinanceReport() {
         const unpaidB = inFactB + EPS < bruttoB;
 
         // Сначала недоплаченные
-        if (unpaidA !== unpaidB) return unpaidB ? 1 : -1; // unpaid(true) должен идти раньше => вернуть -1
+        if (unpaidA !== unpaidB) return unpaidB ? 1 : -1;
 
         const lastA = incA?.lastIncomeDate && incA?.count ? incA.lastIncomeDate : isoOrEmpty(toDate(a.createdAt));
         const lastB = incB?.lastIncomeDate && incB?.count ? incB.lastIncomeDate : isoOrEmpty(toDate(b.createdAt));
 
-        // Новее — выше
         if (lastA && lastB && lastA !== lastB) return lastA > lastB ? -1 : 1;
 
-        // Фолбэк: по номеру (убывающе), чтобы стабильно
+        // Фолбэк: по номеру (убывающе)
         const aa = parseInt((a.bookingNumber || "").replace(/\D/g, "") || "0", 10);
         const bb = parseInt((b.bookingNumber || "").replace(/\D/g, "") || "0", 10);
         return bb - aa;
       });
     }
 
-    // Явная сортировка из UI — прежняя логика
+    // Явная сортировка из UI
     return base.sort((a, b) => {
       const key = sortConfig.key;
       const dir = sortConfig.direction === "asc" ? 1 : -1;
@@ -510,6 +511,13 @@ export default function BookingsFinanceReport() {
         <title>Финансы по заявкам</title>
       </Head>
       <ManagerLayout fullWidthHeader fullWidthMain>
+        {/* скелет/редирект-инфо без раннего return */}
+        {loading ? (
+          <div className="p-6 text-sm text-gray-500">Проверяем доступ…</div>
+        ) : !user || !canView ? (
+          <div className="p-6 text-sm text-gray-500">Переадресация…</div>
+        ) : (
+        <>
         {/* KPI-панель */}
         <div className="w-full px-4 pt-6 grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="rounded-xl border bg-white p-4">
@@ -848,6 +856,8 @@ export default function BookingsFinanceReport() {
             </div>
           </CardContent>
         </Card>
+        </>
+        )}
       </ManagerLayout>
     </>
   );

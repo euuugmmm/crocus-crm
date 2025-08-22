@@ -132,7 +132,7 @@ export default function FinanceBookingPage() {
   const router = useRouter();
   const { id } = router.query;
   const bookingId = typeof id === "string" ? id : "";
-  const { user, isManager, isSuperManager, isAdmin } = useAuth();
+  const { user, isManager, isSuperManager, isAdmin, loading } = useAuth();
   const canView = isManager || isSuperManager || isAdmin;
 
   const [booking, setBooking] = useState<Booking | null>(null);
@@ -168,10 +168,18 @@ export default function FinanceBookingPage() {
   });
   const [editing, setEditing] = useState<{ id?: string; field?: "baseAmount" | "amount"; value?: number }>({});
 
-  useEffect(() => {
-    if (!router.isReady) return;
-    if (!user || !canView) { router.replace("/login"); return; }
-    if (!bookingId) return;
+useEffect(() => {
+  if (!router.isReady) return;
+  if (loading) return;                 // ⬅️ ждём инициализации auth
+  if (!user) {                         // ⬅️ нет пользователя → логин
+    router.replace("/login");
+    return;
+  }
+  if (!canView) {                      // ⬅️ нет прав менеджера → в кабинет агента
+    router.replace("/agent/bookings");
+    return;
+  }
+  if (!bookingId) return;
 
     const unsubB = onSnapshot(doc(db, "bookings", bookingId), (snap) => {
       if (!snap.exists()) return;
@@ -216,7 +224,7 @@ export default function FinanceBookingPage() {
     );
 
     return () => { unsubB(); unsubT(); unsubAcc(); unsubFx(); unsubOrdersAC(); unsubOrdersLegacy(); };
-  }, [router.isReady, bookingId, user, canView, router]);
+  }, [router.isReady, loading, user, canView, bookingId, router]);
 
   // FX helpers
   const eurFrom = (amount: number, ccy: Currency): number => {
